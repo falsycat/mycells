@@ -413,6 +413,7 @@
     var animFrameId = null;
 
     var currentPageId = null;
+    var highlightedNodeId = null;
     var graphDisplayW = 0, graphDisplayH = 0;
 
     // ── Init ──────────────────────────────────────────────────────────────────
@@ -430,7 +431,9 @@
 
     function initPage() {
       currentPageId = getMainContent().dataset.pageId;
+      highlightedNodeId = null;
       colorizeDiffs();
+      setupLinkHighlight();
       fetchGraphAndDraw();
     }
 
@@ -634,6 +637,7 @@
       var dark = document.documentElement.dataset.theme === 'dark';
       return {
         bg:          dark ? '#161616' : '#fafafa',
+        dotGrid:     dark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.09)',
         edge:        dark ? '#3a3a3a' : '#ddd',
         node:        dark ? '#2a3d52' : '#c8d8ec',
         nodeStroke:  dark ? '#4d7aa8' : '#7aa8d4',
@@ -641,6 +645,8 @@
         currentGlow: dark ? 'rgba(77,159,255,0.25)' : 'rgba(0,102,204,0.15)',
         text:        dark ? '#aaa'    : '#555',
         textCurrent: dark ? '#e0e0e0' : '#111',
+        highlight:     'rgba(255, 210, 0, 0.35)',
+        highlightRing: '#f5c400',
       };
     }
 
@@ -653,14 +659,26 @@
       var ctx = canvas.getContext('2d');
       ctx.scale(dpr, dpr);
 
-      var pad = 56;
+      var pad = 16;
       var c = getColors();
       ctx.fillStyle = c.bg;
       ctx.fillRect(0, 0, W, H);
 
+      // Dot-grid background — fills the whole panel so there's no blank void.
+      var dotStep = 28, dotR = 1.2;
+      ctx.fillStyle = c.dotGrid;
+      for (var gx = dotStep / 2; gx < W; gx += dotStep) {
+        for (var gy = dotStep / 2; gy < H; gy += dotStep) {
+          ctx.beginPath();
+          ctx.arc(gx, gy, dotR, 0, 2 * Math.PI);
+          ctx.fill();
+        }
+      }
+
       if (!layout || !localGraph || localGraph.nodes.length === 0) return;
 
       // centerId is always at (0.5, 0.5) in layout space → centre of canvas.
+      // Use a small pad just to keep nodes off the very edge.
       var toX = function (nx) { return pad + nx * (W - 2*pad); };
       var toY = function (ny) { return pad + ny * (H - 2*pad); };
 
@@ -684,10 +702,18 @@
         var x = toX(p.nx), y = toY(p.ny);
         var isCurrent = nd.id === currentPageId;
 
+        var isHighlighted = nd.id === highlightedNodeId;
+
         if (isCurrent) {
           ctx.beginPath();
           ctx.arc(x, y, R + 5, 0, 2*Math.PI);
           ctx.fillStyle = c.currentGlow;
+          ctx.fill();
+        }
+        if (isHighlighted) {
+          ctx.beginPath();
+          ctx.arc(x, y, R + 8, 0, 2*Math.PI);
+          ctx.fillStyle = c.highlight;
           ctx.fill();
         }
 
@@ -695,20 +721,23 @@
         ctx.arc(x, y, R, 0, 2*Math.PI);
         ctx.fillStyle = isCurrent ? c.current : c.node;
         ctx.fill();
-        ctx.strokeStyle = c.nodeStroke;
-        ctx.lineWidth = isCurrent ? 2 : 1;
+        ctx.strokeStyle = isHighlighted ? c.highlightRing : c.nodeStroke;
+        ctx.lineWidth = (isCurrent || isHighlighted) ? 2 : 1;
         ctx.stroke();
 
-        var label = nd.title.length > 20 ? nd.title.slice(0, 20) + '…' : nd.title;
+        // Label centred below the node so it never overflows left/right.
+        var label = nd.title.length > 18 ? nd.title.slice(0, 18) + '…' : nd.title;
         ctx.fillStyle = isCurrent ? c.textCurrent : c.text;
         ctx.font = (isCurrent ? 'bold ' : '') + '11px system-ui';
-        ctx.fillText(label, x + R + 5, y + 4);
+        ctx.textAlign = 'center';
+        ctx.fillText(label, x, y + R + 13);
+        ctx.textAlign = 'left';
       });
     }
 
     function hitTest(W, H, mx, my) {
       if (!layout || !localGraph) return null;
-      var pad = 56;
+      var pad = 16;
       var toX = function (nx) { return pad + nx * (W - 2*pad); };
       var toY = function (ny) { return pad + ny * (H - 2*pad); };
       for (var i = 0; i < localGraph.nodes.length; i++) {
@@ -761,6 +790,32 @@
       graphDisplayW = panel.clientWidth;
       graphDisplayH = panel.clientHeight;
       drawGraphToCanvas(canvas, graphDisplayW, graphDisplayH);
+    }
+
+    // ── Link → graph highlight ────────────────────────────────────────────────
+    function setupLinkHighlight() {
+      var content = getMainContent();
+      if (!content) return;
+
+      content.addEventListener('mouseover', function (e) {
+        var link = e.target.closest('a');
+        var url  = link && link.getAttribute('href');
+        var node = url && localGraph && localGraph.nodes.find(function (nd) {
+          return nd.url === url;
+        });
+        var id = node ? node.id : null;
+        if (id !== highlightedNodeId) {
+          highlightedNodeId = id;
+          redrawGraph();
+        }
+      });
+
+      content.addEventListener('mouseleave', function () {
+        if (highlightedNodeId !== null) {
+          highlightedNodeId = null;
+          redrawGraph();
+        }
+      });
     }
 
     // ── Search (fetches /graph.json which includes text for full-text search) ─

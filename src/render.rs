@@ -134,8 +134,31 @@ pub fn generate_search_json(graph: &SiteGraphCtx) -> anyhow::Result<String> {
     Ok(serde_json::to_string(&graph.nodes)?)
 }
 
+#[derive(Serialize)]
+struct GraphNodeCtx<'a> {
+    id: &'a str,
+    slug: &'a str,
+    title: &'a str,
+    url: &'a str,
+}
+
+#[derive(Serialize)]
+struct GraphCtx<'a> {
+    nodes: Vec<GraphNodeCtx<'a>>,
+    edges: &'a Vec<SiteEdgeCtx>,
+}
+
 pub fn generate_graph_json(graph: &SiteGraphCtx) -> anyhow::Result<String> {
-    Ok(serde_json::to_string(graph)?)
+    let slim = GraphCtx {
+        nodes: graph.nodes.iter().map(|n| GraphNodeCtx {
+            id: &n.id,
+            slug: &n.slug,
+            title: &n.title,
+            url: &n.url,
+        }).collect(),
+        edges: &graph.edges,
+    };
+    Ok(serde_json::to_string(&slim)?)
 }
 
 pub fn build_graph(site: &Site) -> SiteGraphCtx {
