@@ -1,4 +1,5 @@
 use crate::cell::Cell;
+use rayon::prelude::*;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -27,8 +28,8 @@ pub struct Site {
     cells: HashMap<String, Cell>,
     slug_to_id: HashMap<String, String>,
     backlinks: HashMap<String, Vec<String>>,
-    // IDs of non-index cells, sorted descending (newest first)
-    sorted_ids: Vec<String>,
+    // IDs of non-index cells, sorted descending (newest first), capped at 20
+    recent_ids: Vec<String>,
 }
 
 impl Site {
@@ -36,33 +37,43 @@ impl Site {
         let dir_abs = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
         let git_root = crate::git::find_repo_root(&dir_abs);
 
-        let mut cells: HashMap<String, Cell> = HashMap::new();
-        let mut slug_to_id: HashMap<String, String> = HashMap::new();
+        // Collect directory entries first (sequential — OS I/O).
+        let entries: Vec<_> = std::fs::read_dir(dir)?
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.path().extension().and_then(|x| x.to_str()) == Some("md")
+            })
+            .collect();
 
-        for entry in std::fs::read_dir(dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("md") {
-                continue;
-            }
-            let filename = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("")
-                .to_string();
-            let content = std::fs::read_to_string(&path)?;
-            if let Some(mut cell) = Cell::from_file(&filename, &content) {
+        // Parse files in parallel with Rayon.
+        let parsed: Vec<(String, Cell)> = entries
+            .par_iter()
+            .filter_map(|entry| {
+                let path = entry.path();
+                let filename = path.file_name()?.to_str()?.to_string();
+                let content = std::fs::read_to_string(&path).ok()?;
+                let mut cell = Cell::from_file(&filename, &content)
+                    .or_else(|| {
+                        eprintln!("warning: skipping {filename} (no H1 title or unrecognised filename)");
+                        None
+                    })?;
+
                 if let Some(ref root) = git_root {
                     let abs_file = dir_abs.join(&filename);
                     if let Ok(rel) = abs_file.strip_prefix(root) {
                         cell.history = crate::git::file_history(root, rel);
                     }
                 }
-                slug_to_id.insert(cell.slug.clone(), cell.id.clone());
-                cells.insert(cell.id.clone(), cell);
-            } else {
-                eprintln!("warning: skipping {filename} (no H1 title or unrecognised filename)");
-            }
+                Some((cell.id.clone(), cell))
+            })
+            .collect();
+
+        let mut cells: HashMap<String, Cell> = HashMap::with_capacity(parsed.len());
+        let mut slug_to_id: HashMap<String, String> = HashMap::with_capacity(parsed.len());
+
+        for (id, cell) in parsed {
+            slug_to_id.insert(cell.slug.clone(), id.clone());
+            cells.insert(id, cell);
         }
 
         let mut backlinks: HashMap<String, Vec<String>> = HashMap::new();
@@ -81,12 +92,13 @@ impl Site {
             .cloned()
             .collect();
         sorted_ids.sort_by(|a, b| b.cmp(a));
+        let recent_ids = sorted_ids.into_iter().take(20).collect();
 
         Ok(Site {
             cells,
             slug_to_id,
             backlinks,
-            sorted_ids,
+            recent_ids,
         })
     }
 
@@ -104,7 +116,7 @@ impl Site {
     }
 
     pub fn recent_pagerefs(&self) -> Vec<PageRef> {
-        self.sorted_ids
+        self.recent_ids
             .iter()
             .filter_map(|id| self.cells.get(id))
             .map(PageRef::from_cell)

@@ -154,7 +154,7 @@
     }
     #recent-list { list-style: none; }
     #recent-list li { margin-bottom: 0.35rem; }
-    #recent-list a { font-size: 0.85rem; color: var(--text-muted); }
+    #recent-list a { font-size: 0.85rem; color: var(--text-muted); line-height: 1.3; display: block; }
     #recent-list a:hover { color: var(--accent); text-decoration: none; }
 
     /* ── Center: graph panel ── */
@@ -170,6 +170,15 @@
       display: block;
       position: absolute;
       inset: 0;
+    }
+    #graph-loading {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.8rem;
+      color: var(--text-faint);
     }
 
     /* ── Right: note content ── */
@@ -288,7 +297,7 @@
     pre.diff .diff-hunk { color: var(--diff-hunk); }
 
     /* ── Narrow screens: 2-column (sidebar + content, no graph) ── */
-    @media (max-width: 1024px) {
+    @media (max-width: 80rem) {
       #graph-panel { display: none; }
       #content-panel { width: auto; flex: 1; }
     }
@@ -311,8 +320,6 @@
   </style>
 </head>
 <body>
-  <script id="site-data" type="application/json">{{ site_graph | json_encode | safe }}</script>
-
   <div class="layout">
 
     <!-- Left: sidebar -->
@@ -339,9 +346,10 @@
       {% endif %}
     </aside>
 
-    <!-- Center: graph -->
+    <!-- Center: graph (local neighbourhood of current page) -->
     <div id="graph-panel">
-      <canvas id="graph-canvas"></canvas>
+      <div id="graph-loading">Loading graph…</div>
+      <canvas id="graph-canvas" style="display:none"></canvas>
     </div>
 
     <!-- Right: note content -->
@@ -395,20 +403,21 @@
     'use strict';
 
     // ── State ─────────────────────────────────────────────────────────────────
-    var siteData = null;
-    var layout = null;
+    var fullGraph = null;
+    var graphFetchPromise = null;
+
+    var localGraph = null;
+    var layout     = null;   // target layout: { id → { nx, ny, ... } }
+    var layoutFrom = null;   // starting layout for transition animation
+    var animEase   = 1;      // eased progress [0, 1]
+    var animFrameId = null;
+
     var currentPageId = null;
     var graphDisplayW = 0, graphDisplayH = 0;
 
     // ── Init ──────────────────────────────────────────────────────────────────
     function init() {
-      try {
-        siteData = JSON.parse(document.getElementById('site-data').textContent);
-      } catch (e) {
-        siteData = { nodes: [], edges: [] };
-      }
       currentPageId = getMainContent().dataset.pageId;
-      layout = computeLayout(siteData.nodes, siteData.edges);
 
       setupTheme();
       setupSearch();
@@ -422,11 +431,115 @@
     function initPage() {
       currentPageId = getMainContent().dataset.pageId;
       colorizeDiffs();
-      redrawGraph();
+      fetchGraphAndDraw();
     }
 
     function getMainContent() {
       return document.getElementById('main-content');
+    }
+
+    // ── Graph data ────────────────────────────────────────────────────────────
+    // Fetch /graph.json once; subsequent calls reuse the cached promise.
+    function getFullGraph() {
+      if (!graphFetchPromise) {
+        graphFetchPromise = fetch('/graph.json')
+          .then(function (r) { return r.json(); })
+          .then(function (data) { fullGraph = data; return data; })
+          .catch(function () { return { nodes: [], edges: [] }; });
+      }
+      return graphFetchPromise;
+    }
+
+    // Build a local subgraph via BFS from pageId, up to MAX_NODES nodes.
+    var BFS_MAX = 1000;
+    function buildLocalGraph(graph, pageId) {
+      var nodeMap = {};
+      graph.nodes.forEach(function (n) { nodeMap[n.id] = n; });
+
+      // Build adjacency list (undirected).
+      var adj = {};
+      graph.edges.forEach(function (e) {
+        (adj[e.source] = adj[e.source] || []).push(e.target);
+        (adj[e.target] = adj[e.target] || []).push(e.source);
+      });
+
+      var visited = new Set();
+      var queue = [pageId];
+      visited.add(pageId);
+
+      while (queue.length > 0 && visited.size < BFS_MAX) {
+        var cur = queue.shift();
+        var neighbours = adj[cur] || [];
+        for (var i = 0; i < neighbours.length; i++) {
+          var nb = neighbours[i];
+          if (!visited.has(nb)) {
+            visited.add(nb);
+            queue.push(nb);
+            if (visited.size >= BFS_MAX) break;
+          }
+        }
+      }
+
+      var nodes = [];
+      visited.forEach(function (id) {
+        if (nodeMap[id]) nodes.push(nodeMap[id]);
+      });
+
+      var edges = graph.edges.filter(function (e) {
+        return visited.has(e.source) && visited.has(e.target);
+      });
+
+      return { nodes: nodes, edges: edges };
+    }
+
+    function fetchGraphAndDraw() {
+      getFullGraph().then(function (graph) {
+        var newLocal  = buildLocalGraph(graph, currentPageId);
+        var newLayout = computeLayout(newLocal.nodes, newLocal.edges, currentPageId);
+
+        if (!layout) {
+          localGraph = newLocal;
+          layout     = newLayout;
+          animEase   = 1;
+          var loading = document.getElementById('graph-loading');
+          var canvas  = document.getElementById('graph-canvas');
+          if (loading) loading.style.display = 'none';
+          if (canvas)  canvas.style.display  = 'block';
+          redrawGraph();
+        } else {
+          // Animate node positions from old layout to new layout.
+          layoutFrom = layout;
+          localGraph = newLocal;
+          layout     = newLayout;
+          animateLayout(400);
+        }
+      });
+    }
+
+    function animateLayout(duration) {
+      if (animFrameId) { cancelAnimationFrame(animFrameId); animFrameId = null; }
+      var startTime = null;
+      animEase = 0;
+      function step(ts) {
+        if (!startTime) startTime = ts;
+        var t = Math.min(1, (ts - startTime) / duration);
+        // Ease in-out cubic.
+        animEase = t < 0.5 ? 4*t*t*t : 1 - Math.pow(-2*t + 2, 3) / 2;
+        redrawGraph();
+        if (t < 1) { animFrameId = requestAnimationFrame(step); }
+        else        { animFrameId = null; layoutFrom = null; animEase = 1; }
+      }
+      animFrameId = requestAnimationFrame(step);
+    }
+
+    // Interpolated position for a node during layout transition.
+    function getPos(id) {
+      var p = layout[id];
+      if (!layoutFrom || animEase >= 1) return p;
+      var f = layoutFrom[id];
+      if (!f) return p; // new node: snap to destination
+      return { nx: f.nx + (p.nx - f.nx) * animEase,
+               ny: f.ny + (p.ny - f.ny) * animEase };
     }
 
     // ── Theme ─────────────────────────────────────────────────────────────────
@@ -447,22 +560,32 @@
       redrawGraph();
     }
 
-    // ── Force layout ──────────────────────────────────────────────────────────
-    function computeLayout(nodes, edges) {
+    // ── Force layout ───────────────────────────────────────────────────────────
+    // centerId is pinned at the origin so it always ends up at canvas centre.
+    // All nodes are scaled to fit within [0.05, 0.95] after normalization.
+    function computeLayout(nodes, edges, centerId) {
       if (!nodes || nodes.length === 0) return {};
       var n = nodes.length;
       var pos = {};
 
-      nodes.forEach(function (node, i) {
-        var angle = 2 * Math.PI * i / n;
-        pos[node.id] = { x: Math.cos(angle), y: Math.sin(angle), vx: 0, vy: 0 };
+      // Place centerId at origin; others evenly on a unit circle.
+      var nonCenterIdx = 0;
+      var nc = nodes.filter(function (nd) { return nd.id !== centerId; }).length;
+      nodes.forEach(function (nd) {
+        if (nd.id === centerId) {
+          pos[nd.id] = { x: 0, y: 0, vx: 0, vy: 0, pinned: true };
+        } else {
+          var angle = 2 * Math.PI * nonCenterIdx / Math.max(nc, 1);
+          nonCenterIdx++;
+          pos[nd.id] = { x: Math.cos(angle), y: Math.sin(angle), vx: 0, vy: 0, pinned: false };
+        }
       });
 
       var K_REP = 0.8, K_ATT = 0.08, REST = 0.6, DAMP = 0.85, DT = 0.05;
-      var ITERS = n > 80 ? 100 : 250;
+      var ITERS = Math.max(20, Math.min(250, Math.floor(10000000 / (n * n + 1))));
 
       for (var iter = 0; iter < ITERS; iter++) {
-        nodes.forEach(function (nd) { pos[nd.id].fx = 0; pos[nd.id].fy = 0; });
+        nodes.forEach(function (nd) { var p = pos[nd.id]; p.fx = 0; p.fy = 0; });
 
         for (var i = 0; i < n; i++) {
           for (var j = i + 1; j < n; j++) {
@@ -483,23 +606,25 @@
         });
         nodes.forEach(function (nd) {
           var p = pos[nd.id];
+          if (p.pinned) return;
           p.vx = (p.vx + p.fx * DT) * DAMP;
           p.vy = (p.vy + p.fy * DT) * DAMP;
           p.x += p.vx; p.y += p.vy;
         });
       }
 
-      var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+      // Normalize: centerId → (0.5, 0.5); scale so all nodes fit in [0.05, 0.95].
+      var maxR = 0;
       nodes.forEach(function (nd) {
         var p = pos[nd.id];
-        if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
-        if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
+        var r = Math.sqrt(p.x * p.x + p.y * p.y);
+        if (r > maxR) maxR = r;
       });
-      var rx = maxX - minX || 1, ry = maxY - minY || 1;
+      var scale = maxR > 0 ? 0.45 / maxR : 1;
       nodes.forEach(function (nd) {
         var p = pos[nd.id];
-        p.nx = 0.05 + 0.9 * (p.x - minX) / rx;
-        p.ny = 0.05 + 0.9 * (p.y - minY) / ry;
+        p.nx = 0.5 + p.x * scale;
+        p.ny = 0.5 + p.y * scale;
       });
       return pos;
     }
@@ -533,16 +658,17 @@
       ctx.fillStyle = c.bg;
       ctx.fillRect(0, 0, W, H);
 
-      if (!layout || !siteData || siteData.nodes.length === 0) return;
+      if (!layout || !localGraph || localGraph.nodes.length === 0) return;
 
+      // centerId is always at (0.5, 0.5) in layout space → centre of canvas.
       var toX = function (nx) { return pad + nx * (W - 2*pad); };
       var toY = function (ny) { return pad + ny * (H - 2*pad); };
 
       // Edges
       ctx.strokeStyle = c.edge;
       ctx.lineWidth = 1;
-      siteData.edges.forEach(function (e) {
-        var a = layout[e.source], b = layout[e.target];
+      localGraph.edges.forEach(function (e) {
+        var a = getPos(e.source), b = getPos(e.target);
         if (!a || !b) return;
         ctx.beginPath();
         ctx.moveTo(toX(a.nx), toY(a.ny));
@@ -552,8 +678,8 @@
 
       // Nodes
       var R = 7;
-      siteData.nodes.forEach(function (nd) {
-        var p = layout[nd.id];
+      localGraph.nodes.forEach(function (nd) {
+        var p = getPos(nd.id);
         if (!p) return;
         var x = toX(p.nx), y = toY(p.ny);
         var isCurrent = nd.id === currentPageId;
@@ -581,16 +707,16 @@
     }
 
     function hitTest(W, H, mx, my) {
-      if (!layout || !siteData) return null;
+      if (!layout || !localGraph) return null;
       var pad = 56;
       var toX = function (nx) { return pad + nx * (W - 2*pad); };
       var toY = function (ny) { return pad + ny * (H - 2*pad); };
-      for (var i = 0; i < siteData.nodes.length; i++) {
-        var nd = siteData.nodes[i];
-        var p = layout[nd.id];
+      for (var i = 0; i < localGraph.nodes.length; i++) {
+        var nd = localGraph.nodes[i];
+        var p = getPos(nd.id);
         if (!p) continue;
         var dx = mx - toX(p.nx), dy = my - toY(p.ny);
-        if (dx*dx + dy*dy < 144) return nd; // r=12px hit area
+        if (dx*dx + dy*dy < 144) return nd;
       }
       return null;
     }
@@ -603,7 +729,9 @@
       function resize() {
         graphDisplayW = panel.clientWidth;
         graphDisplayH = panel.clientHeight;
-        drawGraphToCanvas(canvas, graphDisplayW, graphDisplayH);
+        if (canvas.style.display !== 'none') {
+          drawGraphToCanvas(canvas, graphDisplayW, graphDisplayH);
+        }
       }
 
       window.addEventListener('resize', function () {
@@ -623,37 +751,48 @@
         var nd = hitTest(graphDisplayW, graphDisplayH, e.clientX - rect.left, e.clientY - rect.top);
         if (nd) navigate(nd.url);
       });
-
-      resize();
     }
 
     function redrawGraph() {
       var panel = document.getElementById('graph-panel');
       var canvas = document.getElementById('graph-canvas');
       if (!panel || panel.offsetParent === null) return;
+      if (!canvas || canvas.style.display === 'none') return;
       graphDisplayW = panel.clientWidth;
       graphDisplayH = panel.clientHeight;
       drawGraphToCanvas(canvas, graphDisplayW, graphDisplayH);
     }
 
-    // ── Search ────────────────────────────────────────────────────────────────
+    // ── Search (fetches /graph.json which includes text for full-text search) ─
     function setupSearch() {
       var input = document.getElementById('search-input');
       var results = document.getElementById('search-results');
+      var searchData = null;
+
+      // Lazy-load search index from /search.json on first keystroke.
+      function ensureSearchData() {
+        if (searchData) return Promise.resolve(searchData);
+        return fetch('/search.json')
+          .then(function (r) { return r.json(); })
+          .then(function (data) { searchData = data; return data; })
+          .catch(function () { return []; });
+      }
 
       input.addEventListener('input', function () {
         var q = input.value.trim().toLowerCase();
         if (!q) { results.classList.add('hidden'); return; }
-        var hits = (siteData ? siteData.nodes : [])
-          .filter(function (nd) {
-            return nd.title.toLowerCase().includes(q) || nd.text.toLowerCase().includes(q);
-          })
-          .slice(0, 12);
-        if (!hits.length) { results.classList.add('hidden'); return; }
-        results.innerHTML = hits.map(function (nd) {
-          return '<a class="search-result-item" href="' + escHtml(nd.url) + '">' + escHtml(nd.title) + '</a>';
-        }).join('');
-        results.classList.remove('hidden');
+        ensureSearchData().then(function (nodes) {
+          var hits = nodes
+            .filter(function (nd) {
+              return nd.title.toLowerCase().includes(q) || nd.text.toLowerCase().includes(q);
+            })
+            .slice(0, 12);
+          if (!hits.length) { results.classList.add('hidden'); return; }
+          results.innerHTML = hits.map(function (nd) {
+            return '<a class="search-result-item" href="' + escHtml(nd.url) + '">' + escHtml(nd.title) + '</a>';
+          }).join('');
+          results.classList.remove('hidden');
+        });
       });
 
       input.addEventListener('blur', function () {

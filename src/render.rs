@@ -1,4 +1,4 @@
-use crate::cell::{extract_plain_text, Cell};
+use crate::cell::Cell;
 use crate::site::{PageRef, Site};
 use pulldown_cmark::{html, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use serde::Serialize;
@@ -67,7 +67,7 @@ struct PageCtx {
     history: Vec<GitCommitCtx>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct SiteNodeCtx {
     pub id: String,
     pub slug: String,
@@ -76,13 +76,13 @@ pub struct SiteNodeCtx {
     pub text: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct SiteEdgeCtx {
     pub source: String,
     pub target: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct SiteGraphCtx {
     pub nodes: Vec<SiteNodeCtx>,
     pub edges: Vec<SiteEdgeCtx>,
@@ -119,9 +119,10 @@ impl Renderer {
         &self,
         cell: &Cell,
         site: &Site,
+        graph: &SiteGraphCtx,
         vars: &HashMap<String, String>,
     ) -> anyhow::Result<String> {
-        let ctx = build_context(cell, site, vars);
+        let ctx = build_context(cell, site, graph, vars);
         let tera_ctx = tera::Context::from_serialize(&ctx)?;
         Ok(self.tera.render("page.html", &tera_ctx)?)
     }
@@ -129,14 +130,16 @@ impl Renderer {
 
 // ── JSON export ───────────────────────────────────────────────────────────────
 
-pub fn generate_search_json(site: &Site) -> anyhow::Result<String> {
-    let nodes = build_site_nodes(site);
-    Ok(serde_json::to_string(&nodes)?)
+pub fn generate_search_json(graph: &SiteGraphCtx) -> anyhow::Result<String> {
+    Ok(serde_json::to_string(&graph.nodes)?)
 }
 
-pub fn generate_graph_json(site: &Site) -> anyhow::Result<String> {
-    let graph = build_site_graph(site);
-    Ok(serde_json::to_string(&graph)?)
+pub fn generate_graph_json(graph: &SiteGraphCtx) -> anyhow::Result<String> {
+    Ok(serde_json::to_string(graph)?)
+}
+
+pub fn build_graph(site: &Site) -> SiteGraphCtx {
+    build_site_graph(site)
 }
 
 // ── Context building ──────────────────────────────────────────────────────────
@@ -157,7 +160,7 @@ fn build_site_nodes(site: &Site) -> Vec<SiteNodeCtx> {
             slug: c.slug.clone(),
             title: c.title.clone(),
             url: c.url(),
-            text: extract_plain_text(&c.raw),
+            text: c.plain_text.clone(),
         })
         .collect()
 }
@@ -187,6 +190,7 @@ fn build_site_graph(site: &Site) -> SiteGraphCtx {
 fn build_context(
     cell: &Cell,
     site: &Site,
+    graph: &SiteGraphCtx,
     vars: &HashMap<String, String>,
 ) -> TemplateCtx {
     let body = render_to_html(&cell.raw, site);
@@ -208,7 +212,6 @@ fn build_context(
         .and_then(|c| c.author_date.split(' ').next())
         .unwrap_or("")
         .to_string();
-    let site_graph = build_site_graph(site);
 
     TemplateCtx {
         page: PageCtx {
@@ -225,7 +228,10 @@ fn build_context(
             history,
         },
         recent_pages,
-        site_graph,
+        site_graph: SiteGraphCtx {
+            nodes: graph.nodes.clone(),
+            edges: graph.edges.clone(),
+        },
         vars: vars.clone(),
     }
 }

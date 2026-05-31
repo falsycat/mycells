@@ -11,6 +11,8 @@ use site::Site;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use rayon::prelude::*;
+
 #[derive(Parser)]
 #[command(name = "mcs", about = "mycells static site generator")]
 struct Cli {
@@ -91,30 +93,44 @@ async fn main() -> anyhow::Result<()> {
             let renderer = make_renderer(template.as_ref())?;
             let vars = make_vars(var);
             let site = Site::load(&cells).context("loading cells")?;
+            let graph = render::build_graph(&site);
 
             std::fs::create_dir_all(&output)?;
 
-            for cell in site.all_cells() {
-                let html = renderer.render(cell, &site, &vars)?;
+            // Pre-create per-cell output dirs (sequential to avoid TOCTOU races),
+            // then render HTML in parallel.
+            let cells: Vec<_> = site.all_cells().collect();
 
-                let out_path = if cell.slug.is_empty() {
-                    output.join("index.html")
-                } else {
-                    let dir = output.join(&cell.slug);
-                    std::fs::create_dir_all(&dir)?;
-                    dir.join("index.html")
-                };
-
-                std::fs::write(&out_path, html)?;
-                eprintln!("wrote {}", out_path.display());
+            for cell in &cells {
+                if !cell.slug.is_empty() {
+                    std::fs::create_dir_all(output.join(&cell.slug))?;
+                }
             }
 
-            let search_json = render::generate_search_json(&site)?;
+            let rendered: Vec<(PathBuf, String)> = cells
+                .par_iter()
+                .map(|cell| -> anyhow::Result<(PathBuf, String)> {
+                    let html = renderer.render(cell, &site, &graph, &vars)?;
+                    let out_path = if cell.slug.is_empty() {
+                        output.join("index.html")
+                    } else {
+                        output.join(&cell.slug).join("index.html")
+                    };
+                    Ok((out_path, html))
+                })
+                .collect::<anyhow::Result<_>>()?;
+
+            for (path, html) in rendered {
+                std::fs::write(&path, html)?;
+                eprintln!("wrote {}", path.display());
+            }
+
+            let search_json = render::generate_search_json(&graph)?;
             let search_path = output.join("search.json");
             std::fs::write(&search_path, search_json)?;
             eprintln!("wrote {}", search_path.display());
 
-            let graph_json = render::generate_graph_json(&site)?;
+            let graph_json = render::generate_graph_json(&graph)?;
             let graph_path = output.join("graph.json");
             std::fs::write(&graph_path, graph_json)?;
             eprintln!("wrote {}", graph_path.display());

@@ -1,5 +1,4 @@
 use std::path::Path;
-use std::process::Command;
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct GitCommit {
@@ -11,55 +10,69 @@ pub struct GitCommit {
 }
 
 pub fn find_repo_root(dir: &Path) -> Option<std::path::PathBuf> {
-    let out = Command::new("git")
-        .args(["rev-parse", "--show-toplevel"])
-        .current_dir(dir)
-        .output()
-        .ok()?;
-    if out.status.success() {
-        let s = std::str::from_utf8(&out.stdout).ok()?.trim().to_string();
-        Some(std::path::PathBuf::from(s))
-    } else {
-        None
-    }
+    let repo = git2::Repository::discover(dir).ok()?;
+    let workdir = repo.workdir()?.to_path_buf();
+    Some(workdir)
 }
 
 pub fn file_history(repo_root: &Path, rel_path: &Path) -> Vec<GitCommit> {
-    let out = Command::new("git")
-        .args([
-            "log",
-            "--max-count=30",
-            "--follow",
-            "--format=%H\x1f%an\x1f%ai\x1f%s",
-            "--",
-        ])
-        .arg(rel_path)
-        .current_dir(repo_root)
-        .output();
-
-    let out = match out {
-        Ok(o) if o.status.success() => o,
-        _ => return vec![],
+    let repo = match git2::Repository::open(repo_root) {
+        Ok(r) => r,
+        Err(_) => return vec![],
     };
 
-    let text = String::from_utf8_lossy(&out.stdout);
+    let mut revwalk = match repo.revwalk() {
+        Ok(w) => w,
+        Err(_) => return vec![],
+    };
+    if revwalk.push_head().is_err() {
+        return vec![];
+    }
+    revwalk.set_sorting(git2::Sort::TIME).ok();
+
     let mut commits = Vec::new();
 
-    for line in text.lines() {
-        if line.trim().is_empty() {
+    for oid in revwalk {
+        if commits.len() >= 30 {
+            break;
+        }
+        let oid = match oid {
+            Ok(o) => o,
+            Err(_) => continue,
+        };
+        let commit = match repo.find_commit(oid) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        if !commit_touches_file(&repo, &commit, rel_path) {
             continue;
         }
-        let parts: Vec<&str> = line.splitn(4, '\x1f').collect();
-        if parts.len() < 4 {
-            continue;
-        }
-        let hash = parts[0].to_string();
-        let diff = commit_file_diff(repo_root, &hash, rel_path);
+
+        let diff = commit_file_diff(&repo, &commit, rel_path);
+        let author = commit.author();
+        let author_name = author.name().unwrap_or("").to_string();
+        let author_date = {
+            let t = commit.author().when();
+            let secs = t.seconds();
+            let offset_min = t.offset_minutes();
+            let sign = if offset_min >= 0 { '+' } else { '-' };
+            let abs = offset_min.unsigned_abs();
+            format!(
+                "{} {}{:02}{:02}",
+                format_unix_time(secs),
+                sign,
+                abs / 60,
+                abs % 60
+            )
+        };
+        let message = commit.summary().unwrap_or("").to_string();
+
         commits.push(GitCommit {
-            hash,
-            author: parts[1].to_string(),
-            author_date: parts[2].to_string(),
-            message: parts[3].to_string(),
+            hash: format!("{}", oid),
+            author: author_name,
+            author_date,
+            message,
             diff,
         });
     }
@@ -67,22 +80,101 @@ pub fn file_history(repo_root: &Path, rel_path: &Path) -> Vec<GitCommit> {
     commits
 }
 
-fn commit_file_diff(repo_root: &Path, hash: &str, rel_path: &Path) -> String {
-    let out = Command::new("git")
-        .args(["show", "--format=", "-p", hash, "--"])
-        .arg(rel_path)
-        .current_dir(repo_root)
-        .output();
+fn commit_touches_file(repo: &git2::Repository, commit: &git2::Commit, rel_path: &Path) -> bool {
+    let new_tree = match commit.tree() {
+        Ok(t) => t,
+        Err(_) => return false,
+    };
 
-    match out {
-        Ok(o) if o.status.success() => {
-            let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            if s.len() > 8192 {
-                format!("{}…(truncated)", &s[..8192])
-            } else {
-                s
-            }
+    let old_tree = commit
+        .parent(0)
+        .ok()
+        .and_then(|p| p.tree().ok());
+
+    let mut diff_opts = git2::DiffOptions::new();
+    diff_opts.pathspec(rel_path);
+
+    let diff = match repo.diff_tree_to_tree(
+        old_tree.as_ref(),
+        Some(&new_tree),
+        Some(&mut diff_opts),
+    ) {
+        Ok(d) => d,
+        Err(_) => return false,
+    };
+
+    diff.stats().map(|s| s.files_changed() > 0).unwrap_or(false)
+}
+
+fn commit_file_diff(repo: &git2::Repository, commit: &git2::Commit, rel_path: &Path) -> String {
+    let new_tree = match commit.tree() {
+        Ok(t) => t,
+        Err(_) => return String::new(),
+    };
+
+    let old_tree = commit
+        .parent(0)
+        .ok()
+        .and_then(|p| p.tree().ok());
+
+    let mut diff_opts = git2::DiffOptions::new();
+    diff_opts.pathspec(rel_path);
+
+    let diff = match repo.diff_tree_to_tree(
+        old_tree.as_ref(),
+        Some(&new_tree),
+        Some(&mut diff_opts),
+    ) {
+        Ok(d) => d,
+        Err(_) => return String::new(),
+    };
+
+    let mut output = String::new();
+    diff.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
+        let origin = line.origin();
+        match origin {
+            '+' | '-' | ' ' => output.push(origin),
+            _ => {}
         }
-        _ => String::new(),
+        if let Ok(s) = std::str::from_utf8(line.content()) {
+            output.push_str(s);
+        }
+        true
+    })
+    .ok();
+
+    let output = output.trim_end().to_string();
+    if output.len() > 8192 {
+        format!("{}…(truncated)", &output[..8192])
+    } else {
+        output
     }
+}
+
+fn format_unix_time(secs: i64) -> String {
+    // Simple ISO-8601 date formatting without external deps.
+    // Compute year/month/day from Unix timestamp.
+    let days_since_epoch = secs / 86400;
+    let time_of_day = secs % 86400;
+    let h = time_of_day / 3600;
+    let m = (time_of_day % 3600) / 60;
+    let s = time_of_day % 60;
+
+    let (y, mo, d) = days_to_ymd(days_since_epoch);
+    format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", y, mo, d, h, m, s)
+}
+
+fn days_to_ymd(mut days: i64) -> (i32, u32, u32) {
+    // Proleptic Gregorian calendar from Unix epoch (1970-01-01).
+    days += 719468; // shift to March 1, 0000 era
+    let era = if days >= 0 { days } else { days - 146096 } / 146097;
+    let doe = days - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let mo = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if mo <= 2 { y + 1 } else { y };
+    (y as i32, mo as u32, d as u32)
 }

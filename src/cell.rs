@@ -14,7 +14,8 @@ pub struct Cell {
     pub slug: String,
     pub date: String,
     pub title: String,
-    pub raw: String,
+    pub raw: Box<str>,
+    pub plain_text: String,
     pub outlinks: Vec<String>,
     pub history: Vec<crate::git::GitCommit>,
 }
@@ -23,13 +24,16 @@ impl Cell {
     pub fn from_file(filename: &str, content: &str) -> Option<Self> {
         if filename == "index.md" {
             let title = extract_title(content)?;
+            let plain_text = extract_plain_text(content);
+            let outlinks = extract_outlinks(content);
             Some(Cell {
                 id: "index".to_string(),
                 slug: String::new(),
                 date: String::new(),
                 title,
-                raw: content.to_string(),
-                outlinks: extract_outlinks(content),
+                raw: content.to_string().into_boxed_str(),
+                plain_text,
+                outlinks,
                 history: vec![],
             })
         } else {
@@ -39,13 +43,16 @@ impl Cell {
             let slug = caps[3].to_string();
             let id = format!("{}{}", date, seq);
             let title = extract_title(content)?;
+            let plain_text = extract_plain_text(content);
+            let outlinks = extract_outlinks(content);
             Some(Cell {
                 id,
                 slug,
                 date,
                 title,
-                raw: content.to_string(),
-                outlinks: extract_outlinks(content),
+                raw: content.to_string().into_boxed_str(),
+                plain_text,
+                outlinks,
                 history: vec![],
             })
         }
