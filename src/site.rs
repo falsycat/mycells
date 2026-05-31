@@ -124,15 +124,15 @@ impl Site {
     }
 
     pub fn backlink_pagerefs(&self, id: &str) -> Vec<PageRef> {
-        self.backlinks
-            .get(id)
-            .map(|ids| {
-                ids.iter()
-                    .filter_map(|bid| self.cells.get(bid))
-                    .filter(|c| c.id != "index")
-                    .map(PageRef::from_cell)
-                    .collect()
-            })
-            .unwrap_or_default()
+        let Some(ids) = self.backlinks.get(id) else {
+            return vec![];
+        };
+        let mut seen = std::collections::HashSet::new();
+        ids.iter()
+            .filter(|bid| seen.insert(bid.as_str()))
+            .filter_map(|bid| self.cells.get(bid.as_str()))
+            .filter(|c| c.id != "index")
+            .map(PageRef::from_cell)
+            .collect()
     }
 }

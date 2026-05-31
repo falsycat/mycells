@@ -414,7 +414,21 @@
 
     var currentPageId = null;
     var highlightedNodeId = null;
+    var hoveredNodeId = null;
+    var degreeMap = {};
+    var communityMap = {};
+    var globalPos = null;
+    var globalBounds = null;
+    var globalCommunityMap = null;
     var graphDisplayW = 0, graphDisplayH = 0;
+
+    // Viewport: graph-space coord at canvas centre + uniform pixel zoom.
+    var viewCX = 0.5, viewCY = 0.5, viewZoom = 0;
+    var viewCXFrom = 0.5, viewCYFrom = 0.5, viewZoomFrom = 0;
+
+    // Drag state.
+    var isDragging = false, didDrag = false;
+    var dragStartX = 0, dragStartY = 0, dragViewCX = 0, dragViewCY = 0;
 
     // ── Init ──────────────────────────────────────────────────────────────────
     function init() {
@@ -495,25 +509,125 @@
       return { nodes: nodes, edges: edges };
     }
 
+    var COMMUNITY_HUES = [210, 150, 30, 280, 10, 185, 340, 55, 120, 255];
+
+    function buildCommunities(nodes, edges) {
+      var labels = {};
+      nodes.forEach(function (nd) { labels[nd.id] = nd.id; });
+
+      var adj = {};
+      nodes.forEach(function (nd) { adj[nd.id] = []; });
+      edges.forEach(function (e) {
+        adj[e.source].push(e.target);
+        adj[e.target].push(e.source);
+      });
+
+      // Deterministic seeded PRNG (Park-Miller LCG) — seed from sorted node IDs.
+      var seedStr = nodes.map(function (nd) { return nd.id; }).sort().join('\0');
+      var s = 5381;
+      for (var si = 0; si < seedStr.length; si++) {
+        s = ((s << 5) + s + seedStr.charCodeAt(si)) >>> 0;
+      }
+      s = s || 1;
+      function rand() { s = (s * 16807) % 2147483647; return (s - 1) / 2147483646; }
+
+      for (var iter = 0; iter < 20; iter++) {
+        var ids = nodes.map(function (nd) { return nd.id; });
+        for (var i = ids.length - 1; i > 0; i--) {
+          var j = Math.floor(rand() * (i + 1));
+          var tmp = ids[i]; ids[i] = ids[j]; ids[j] = tmp;
+        }
+        var changed = false;
+        ids.forEach(function (id) {
+          var nbrs = adj[id];
+          if (!nbrs || !nbrs.length) return;
+          var freq = {};
+          nbrs.forEach(function (nb) { var l = labels[nb]; freq[l] = (freq[l] || 0) + 1; });
+          var best = null, bestN = 0;
+          Object.keys(freq).sort().forEach(function (l) {
+            if (freq[l] > bestN || (freq[l] === bestN && l < best)) { bestN = freq[l]; best = l; }
+          });
+          if (best && best !== labels[id]) { labels[id] = best; changed = true; }
+        });
+        if (!changed) break;
+      }
+
+      var sizes = {};
+      nodes.forEach(function (nd) { var l = labels[nd.id]; sizes[l] = (sizes[l] || 0) + 1; });
+
+      var labelToHue = {};
+      var hueIdx = 0;
+      Object.keys(sizes).sort().forEach(function (l) {
+        if (sizes[l] >= 2) { labelToHue[l] = COMMUNITY_HUES[hueIdx++ % COMMUNITY_HUES.length]; }
+      });
+
+      var result = {};
+      nodes.forEach(function (nd) {
+        var l = labels[nd.id];
+        if (l in labelToHue) result[nd.id] = labelToHue[l];
+      });
+      return result;
+    }
+
+    function buildDegreeMap(nodes, edges) {
+      var dm = {};
+      nodes.forEach(function (nd) { dm[nd.id] = 0; });
+      edges.forEach(function (e) {
+        dm[e.source] = (dm[e.source] || 0) + 1;
+        dm[e.target] = (dm[e.target] || 0) + 1;
+      });
+      return dm;
+    }
+
     function fetchGraphAndDraw() {
       getFullGraph().then(function (graph) {
-        var newLocal  = buildLocalGraph(graph, currentPageId);
-        var newLayout = computeLayout(newLocal.nodes, newLocal.edges, currentPageId);
+        var newLocal = buildLocalGraph(graph, currentPageId);
+        degreeMap = buildDegreeMap(newLocal.nodes, newLocal.edges);
+        if (!globalCommunityMap) {
+          globalCommunityMap = buildCommunities(graph.nodes, graph.edges);
+        }
+        communityMap = globalCommunityMap;
+
+        if (!globalPos) {
+          globalPos = computeRawLayout(newLocal.nodes, newLocal.edges, currentPageId);
+          // Compute fixed bounds once so the normalised layout stays stable.
+          var allIds = Object.keys(globalPos);
+          var xs = allIds.map(function (id) { return globalPos[id].x; });
+          var ys = allIds.map(function (id) { return globalPos[id].y; });
+          globalBounds = {
+            minX: Math.min.apply(null, xs), maxX: Math.max.apply(null, xs),
+            minY: Math.min.apply(null, ys), maxY: Math.max.apply(null, ys)
+          };
+        } else {
+          addMissingNodes(globalPos, newLocal.nodes, newLocal.edges);
+        }
+        var newLayout = computeGlobalLayout(globalPos, newLocal.nodes);
 
         if (!layout) {
           localGraph = newLocal;
           layout     = newLayout;
           animEase   = 1;
+          var panel   = document.getElementById('graph-panel');
           var loading = document.getElementById('graph-loading');
           var canvas  = document.getElementById('graph-canvas');
+          graphDisplayW = panel.clientWidth;
+          graphDisplayH = panel.clientHeight;
+          viewZoom = defaultViewZoom();
+          var gp = globalNodePos(currentPageId);
+          panToGlobalPos(gp.nx, gp.ny);
+          viewCXFrom = viewCX; viewCYFrom = viewCY; viewZoomFrom = viewZoom;
           if (loading) loading.style.display = 'none';
           if (canvas)  canvas.style.display  = 'block';
           redrawGraph();
         } else {
-          // Animate node positions from old layout to new layout.
           layoutFrom = layout;
           localGraph = newLocal;
           layout     = newLayout;
+          viewCXFrom = viewCX; viewCYFrom = viewCY; viewZoomFrom = viewZoom;
+          if (viewZoom > 0) {
+            var gp = globalNodePos(currentPageId);
+            panToGlobalPos(gp.nx, gp.ny);
+          }
           animateLayout(400);
         }
       });
@@ -564,28 +678,26 @@
     }
 
     // ── Force layout ───────────────────────────────────────────────────────────
-    // centerId is pinned at the origin so it always ends up at canvas centre.
-    // All nodes are scaled to fit within [0.05, 0.95] after normalization.
-    function computeLayout(nodes, edges, centerId) {
+    // Compute raw simulation positions once. anchorId is pinned at origin.
+    function computeRawLayout(nodes, edges, anchorId) {
       if (!nodes || nodes.length === 0) return {};
       var n = nodes.length;
       var pos = {};
 
-      // Place centerId at origin; others evenly on a unit circle.
-      var nonCenterIdx = 0;
-      var nc = nodes.filter(function (nd) { return nd.id !== centerId; }).length;
+      var nonAnchorIdx = 0;
+      var na = nodes.filter(function (nd) { return nd.id !== anchorId; }).length;
       nodes.forEach(function (nd) {
-        if (nd.id === centerId) {
+        if (nd.id === anchorId) {
           pos[nd.id] = { x: 0, y: 0, vx: 0, vy: 0, pinned: true };
         } else {
-          var angle = 2 * Math.PI * nonCenterIdx / Math.max(nc, 1);
-          nonCenterIdx++;
-          pos[nd.id] = { x: Math.cos(angle), y: Math.sin(angle), vx: 0, vy: 0, pinned: false };
+          var angle = 2 * Math.PI * nonAnchorIdx / Math.max(na, 1);
+          nonAnchorIdx++;
+          pos[nd.id] = { x: Math.cos(angle) * 2, y: Math.sin(angle) * 2, vx: 0, vy: 0, pinned: false };
         }
       });
 
-      var K_REP = 0.8, K_ATT = 0.08, REST = 0.6, DAMP = 0.85, DT = 0.05;
-      var ITERS = Math.max(20, Math.min(250, Math.floor(10000000 / (n * n + 1))));
+      var K_REP = 2.5, K_ATT = 0.10, REST = 0.35, DAMP = 0.85, DT = 0.05;
+      var ITERS = Math.max(20, Math.min(300, Math.floor(10000000 / (n * n + 1))));
 
       for (var iter = 0; iter < ITERS; iter++) {
         nodes.forEach(function (nd) { var p = pos[nd.id]; p.fx = 0; p.fy = 0; });
@@ -615,21 +727,97 @@
           p.x += p.vx; p.y += p.vy;
         });
       }
-
-      // Normalize: centerId → (0.5, 0.5); scale so all nodes fit in [0.05, 0.95].
-      var maxR = 0;
-      nodes.forEach(function (nd) {
-        var p = pos[nd.id];
-        var r = Math.sqrt(p.x * p.x + p.y * p.y);
-        if (r > maxR) maxR = r;
-      });
-      var scale = maxR > 0 ? 0.45 / maxR : 1;
-      nodes.forEach(function (nd) {
-        var p = pos[nd.id];
-        p.nx = 0.5 + p.x * scale;
-        p.ny = 0.5 + p.y * scale;
-      });
       return pos;
+    }
+
+    // Place any nodes not yet in rawPos near their neighbours (deterministic).
+    function addMissingNodes(rawPos, nodes, edges) {
+      var adj = {};
+      nodes.forEach(function (nd) { adj[nd.id] = []; });
+      edges.forEach(function (e) {
+        adj[e.source].push(e.target);
+        adj[e.target].push(e.source);
+      });
+      nodes.forEach(function (nd) {
+        if (rawPos[nd.id]) return;
+        var nbrs = adj[nd.id] || [];
+        var sx = 0, sy = 0, cnt = 0;
+        nbrs.forEach(function (nb) {
+          if (rawPos[nb]) { sx += rawPos[nb].x; sy += rawPos[nb].y; cnt++; }
+        });
+        var h = nd.id.split('').reduce(function (a, c) { return (a * 31 + c.charCodeAt(0)) >>> 0; }, 0);
+        var ox = ((h & 0xff) / 255 - 0.5) * 1.5;
+        var oy = (((h >> 8) & 0xff) / 255 - 0.5) * 1.5;
+        rawPos[nd.id] = cnt > 0
+          ? { x: sx / cnt + ox, y: sy / cnt + oy, vx: 0, vy: 0, pinned: false }
+          : { x: ox * 4, y: oy * 4, vx: 0, vy: 0, pinned: false };
+      });
+    }
+
+    // Shift rawPos so centerId lands at (0.5, 0.5), scale by mean distance.
+    function deriveLayout(rawPos, nodes, centerId) {
+      var center = rawPos[centerId];
+      if (!center) return {};
+
+      var totalR = 0, rCount = 0;
+      nodes.forEach(function (nd) {
+        if (nd.id === centerId) return;
+        var p = rawPos[nd.id];
+        if (!p) return;
+        var dx = p.x - center.x, dy = p.y - center.y;
+        totalR += Math.sqrt(dx * dx + dy * dy);
+        rCount++;
+      });
+      var avgR = rCount > 0 ? totalR / rCount : 1;
+      var scale = 0.40 / Math.max(avgR, 0.01);
+
+      var result = {};
+      nodes.forEach(function (nd) {
+        var p = rawPos[nd.id];
+        if (!p) return;
+        result[nd.id] = {
+          nx: 0.5 + (p.x - center.x) * scale,
+          ny: 0.5 + (p.y - center.y) * scale
+        };
+      });
+      return result;
+    }
+
+    // Build a stable global layout normalised to [pad, 1-pad] using fixed globalBounds.
+    var PAD_GLOBAL = 0.08;
+    function computeGlobalLayout(rawPos, nodes) {
+      if (!nodes || nodes.length === 0 || !globalBounds) return {};
+      var rx = globalBounds.maxX - globalBounds.minX || 1;
+      var ry = globalBounds.maxY - globalBounds.minY || 1;
+      var result = {};
+      nodes.forEach(function (nd) {
+        var p = rawPos[nd.id];
+        if (!p) return;
+        result[nd.id] = {
+          nx: PAD_GLOBAL + (p.x - globalBounds.minX) / rx * (1 - 2 * PAD_GLOBAL),
+          ny: PAD_GLOBAL + (p.y - globalBounds.minY) / ry * (1 - 2 * PAD_GLOBAL)
+        };
+      });
+      return result;
+    }
+
+    function globalNodePos(nodeId) {
+      if (!globalPos || !globalBounds || !globalPos[nodeId]) return { nx: 0.5, ny: 0.5 };
+      var p = globalPos[nodeId];
+      var rx = globalBounds.maxX - globalBounds.minX || 1;
+      var ry = globalBounds.maxY - globalBounds.minY || 1;
+      return {
+        nx: PAD_GLOBAL + (p.x - globalBounds.minX) / rx * (1 - 2 * PAD_GLOBAL),
+        ny: PAD_GLOBAL + (p.y - globalBounds.minY) / ry * (1 - 2 * PAD_GLOBAL)
+      };
+    }
+
+    // Set viewCX/viewCY so the node at global coords (gx, gy) appears at
+    // screen position (gx*W, gy*H).  Derivation: screenX = W/2 + (gx - viewCX)*zoom = gx*W
+    // => viewCX = gx + (0.5 - gx)*W/zoom  (and analogously for Y).
+    function panToGlobalPos(gx, gy) {
+      viewCX = gx + (0.5 - gx) * graphDisplayW / viewZoom;
+      viewCY = gy + (0.5 - gy) * graphDisplayH / viewZoom;
     }
 
     // ── Graph drawing ─────────────────────────────────────────────────────────
@@ -677,10 +865,12 @@
 
       if (!layout || !localGraph || localGraph.nodes.length === 0) return;
 
-      // centerId is always at (0.5, 0.5) in layout space → centre of canvas.
-      // Use a small pad just to keep nodes off the very edge.
-      var toX = function (nx) { return pad + nx * (W - 2*pad); };
-      var toY = function (ny) { return pad + ny * (H - 2*pad); };
+      var curCX   = viewCXFrom   + (viewCX   - viewCXFrom)   * animEase;
+      var curCY   = viewCYFrom   + (viewCY   - viewCYFrom)   * animEase;
+      var curZoom = viewZoomFrom + (viewZoom  - viewZoomFrom) * animEase;
+      if (!curZoom) return;
+      var toX = function (nx) { return W / 2 + (nx - curCX) * curZoom; };
+      var toY = function (ny) { return H / 2 + (ny - curCY) * curZoom; };
 
       // Edges
       ctx.strokeStyle = c.edge;
@@ -695,12 +885,19 @@
       });
 
       // Nodes
-      var R = 7;
+      var R_MIN = 4, R_MAX = 14;
+      var maxDeg = 1;
+      localGraph.nodes.forEach(function (nd) {
+        var d = degreeMap[nd.id] || 0;
+        if (d > maxDeg) maxDeg = d;
+      });
       localGraph.nodes.forEach(function (nd) {
         var p = getPos(nd.id);
         if (!p) return;
         var x = toX(p.nx), y = toY(p.ny);
         var isCurrent = nd.id === currentPageId;
+        var deg = degreeMap[nd.id] || 0;
+        var R = R_MIN + (R_MAX - R_MIN) * Math.sqrt(deg / maxDeg);
 
         var isHighlighted = nd.id === highlightedNodeId;
 
@@ -717,16 +914,32 @@
           ctx.fill();
         }
 
+        var hue = communityMap[nd.id];
+        var dark = document.documentElement.dataset.theme === 'dark';
+        var nodeFill   = hue != null ? (dark ? 'hsl('+hue+',38%,26%)' : 'hsl('+hue+',52%,76%)') : c.node;
+        var nodeStroke = hue != null ? (dark ? 'hsl('+hue+',44%,46%)' : 'hsl('+hue+',46%,58%)') : c.nodeStroke;
+
         ctx.beginPath();
         ctx.arc(x, y, R, 0, 2*Math.PI);
-        ctx.fillStyle = isCurrent ? c.current : c.node;
+        ctx.fillStyle = isCurrent ? c.current : nodeFill;
         ctx.fill();
-        ctx.strokeStyle = isHighlighted ? c.highlightRing : c.nodeStroke;
+        ctx.strokeStyle = isHighlighted ? c.highlightRing : nodeStroke;
         ctx.lineWidth = (isCurrent || isHighlighted) ? 2 : 1;
         ctx.stroke();
 
-        // Label centred below the node so it never overflows left/right.
-        var label = nd.title.length > 18 ? nd.title.slice(0, 18) + '…' : nd.title;
+      });
+
+      // Label pass — drawn after all nodes so text is always in front.
+      localGraph.nodes.forEach(function (nd) {
+        var showLabel = nd.id === currentPageId || nd.id === hoveredNodeId;
+        if (!showLabel) return;
+        var p = getPos(nd.id);
+        if (!p) return;
+        var x = toX(p.nx), y = toY(p.ny);
+        var isCurrent = nd.id === currentPageId;
+        var deg = degreeMap[nd.id] || 0;
+        var R = R_MIN + (R_MAX - R_MIN) * Math.sqrt(deg / maxDeg);
+        var label = nd.title.length > 22 ? nd.title.slice(0, 22) + '…' : nd.title;
         ctx.fillStyle = isCurrent ? c.textCurrent : c.text;
         ctx.font = (isCurrent ? 'bold ' : '') + '11px system-ui';
         ctx.textAlign = 'center';
@@ -736,18 +949,32 @@
     }
 
     function hitTest(W, H, mx, my) {
-      if (!layout || !localGraph) return null;
-      var pad = 16;
-      var toX = function (nx) { return pad + nx * (W - 2*pad); };
-      var toY = function (ny) { return pad + ny * (H - 2*pad); };
+      if (!layout || !localGraph || !viewZoom) return null;
+      var curCX   = viewCXFrom   + (viewCX   - viewCXFrom)   * animEase;
+      var curCY   = viewCYFrom   + (viewCY   - viewCYFrom)   * animEase;
+      var curZoom = viewZoomFrom + (viewZoom  - viewZoomFrom) * animEase;
+      var toX = function (nx) { return W / 2 + (nx - curCX) * curZoom; };
+      var toY = function (ny) { return H / 2 + (ny - curCY) * curZoom; };
+      var R_MIN = 4, R_MAX = 14;
+      var maxDeg = 1;
+      localGraph.nodes.forEach(function (nd) {
+        var d = degreeMap[nd.id] || 0;
+        if (d > maxDeg) maxDeg = d;
+      });
       for (var i = 0; i < localGraph.nodes.length; i++) {
         var nd = localGraph.nodes[i];
         var p = getPos(nd.id);
         if (!p) continue;
+        var deg = degreeMap[nd.id] || 0;
+        var R = R_MIN + (R_MAX - R_MIN) * Math.sqrt(deg / maxDeg);
         var dx = mx - toX(p.nx), dy = my - toY(p.ny);
-        if (dx*dx + dy*dy < 144) return nd;
+        if (dx*dx + dy*dy < (R + 4) * (R + 4)) return nd;
       }
       return null;
+    }
+
+    function defaultViewZoom() {
+      return Math.min(graphDisplayW, graphDisplayH) - 32;
     }
 
     // ── Graph panel ───────────────────────────────────────────────────────────
@@ -767,19 +994,88 @@
         if (panel.offsetParent !== null) resize();
       });
 
+      // ── Hover detection ───────────────────────────────────────────────────
       canvas.addEventListener('mousemove', function (e) {
+        if (isDragging) return;
         if (!graphDisplayW) return;
         var rect = canvas.getBoundingClientRect();
         var nd = hitTest(graphDisplayW, graphDisplayH, e.clientX - rect.left, e.clientY - rect.top);
         canvas.style.cursor = nd ? 'pointer' : 'default';
+        var newId = nd ? nd.id : null;
+        if (newId !== hoveredNodeId) {
+          hoveredNodeId = newId;
+          redrawGraph();
+        }
       });
 
+      canvas.addEventListener('mouseleave', function () {
+        if (!isDragging && hoveredNodeId !== null) {
+          hoveredNodeId = null;
+          redrawGraph();
+        }
+      });
+
+      // ── Click → navigate ──────────────────────────────────────────────────
       canvas.addEventListener('click', function (e) {
-        if (!graphDisplayW) return;
+        if (didDrag || !graphDisplayW) return;
         var rect = canvas.getBoundingClientRect();
         var nd = hitTest(graphDisplayW, graphDisplayH, e.clientX - rect.left, e.clientY - rect.top);
         if (nd) navigate(nd.url);
       });
+
+      // ── Drag to pan ───────────────────────────────────────────────────────
+      canvas.addEventListener('mousedown', function (e) {
+        if (e.button !== 0) return;
+        isDragging = true;
+        didDrag = false;
+        dragStartX = e.clientX;
+        dragStartY = e.clientY;
+        dragViewCX = viewCX;
+        dragViewCY = viewCY;
+        e.preventDefault();
+      });
+
+      window.addEventListener('mousemove', function (e) {
+        if (!isDragging) return;
+        var dx = e.clientX - dragStartX;
+        var dy = e.clientY - dragStartY;
+        if (Math.abs(dx) > 3 || Math.abs(dy) > 3) didDrag = true;
+        if (!didDrag || !viewZoom) return;
+        canvas.style.cursor = 'grabbing';
+        viewCX = dragViewCX - dx / viewZoom;
+        viewCY = dragViewCY - dy / viewZoom;
+        // Snap viewport From to current so animation doesn't fight drag.
+        viewCXFrom = viewCX; viewCYFrom = viewCY;
+        redrawGraph();
+      });
+
+      window.addEventListener('mouseup', function () {
+        if (!isDragging) return;
+        isDragging = false;
+        canvas.style.cursor = 'default';
+        redrawGraph();
+      });
+
+      // ── Wheel to zoom ─────────────────────────────────────────────────────
+      canvas.addEventListener('wheel', function (e) {
+        e.preventDefault();
+        if (!viewZoom) return;
+        var rect = canvas.getBoundingClientRect();
+        var mx = e.clientX - rect.left;
+        var my = e.clientY - rect.top;
+        // Graph-space coordinate under cursor.
+        var gx = (mx - graphDisplayW / 2) / viewZoom + viewCX;
+        var gy = (my - graphDisplayH / 2) / viewZoom + viewCY;
+        var factor = e.deltaY > 0 ? 1 / 1.15 : 1.15;
+        var newZoom = Math.max(80, Math.min(8000, viewZoom * factor));
+        // Keep cursor fixed in graph space.
+        viewCX = gx - (mx - graphDisplayW / 2) / newZoom;
+        viewCY = gy - (my - graphDisplayH / 2) / newZoom;
+        viewZoom = newZoom;
+        // Snap From so animation doesn't fight zoom.
+        viewCXFrom = viewCX; viewCYFrom = viewCY; viewZoomFrom = viewZoom;
+        redrawGraph();
+      }, { passive: false });
     }
 
     function redrawGraph() {

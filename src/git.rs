@@ -145,7 +145,12 @@ fn commit_file_diff(repo: &git2::Repository, commit: &git2::Commit, rel_path: &P
 
     let output = output.trim_end().to_string();
     if output.len() > 8192 {
-        format!("{}…(truncated)", &output[..8192])
+        // find a char boundary to safely truncate
+        let mut end = 8192;
+        while !output.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}…(truncated)", &output[..end])
     } else {
         output
     }
