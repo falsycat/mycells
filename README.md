@@ -19,7 +19,7 @@ Each note is a **cell** — a single Markdown file with a unique ID. Cells link 
 Requires [Rust](https://rustup.rs/).
 
 ```sh
-git clone https://github.com/yourname/mycells
+git clone https://github.com/falsycat/mycells
 cd mycells
 cargo install --path .
 ```
