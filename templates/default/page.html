@@ -1,0 +1,735 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ page.title }} — {{ vars.site_title | default(value="mycells") }}</title>
+  <style>
+    :root {
+      --bg: #ffffff;
+      --bg-sidebar: #f7f7f7;
+      --bg-graph: #fafafa;
+      --bg-card: #f9f9f9;
+      --text: #1a1a1a;
+      --text-muted: #666;
+      --text-faint: #aaa;
+      --border: #e5e5e5;
+      --accent: #0066cc;
+      --accent-hover: #004ea8;
+      --node: #c8d8ec;
+      --node-stroke: #7aa8d4;
+      --node-current: #0066cc;
+      --code-bg: #f4f4f4;
+      --diff-add: #22863a;
+      --diff-remove: #cb2431;
+      --diff-hunk: #6a737d;
+      --shadow: rgba(0,0,0,0.08);
+    }
+    [data-theme="dark"] {
+      --bg: #1a1a1a;
+      --bg-sidebar: #141414;
+      --bg-graph: #161616;
+      --bg-card: #222222;
+      --text: #e0e0e0;
+      --text-muted: #999;
+      --text-faint: #555;
+      --border: #333;
+      --accent: #4d9fff;
+      --accent-hover: #80bfff;
+      --node: #2a3d52;
+      --node-stroke: #4d7aa8;
+      --node-current: #4d9fff;
+      --code-bg: #252525;
+      --diff-add: #3fb950;
+      --diff-remove: #f85149;
+      --diff-hunk: #8b949e;
+      --shadow: rgba(0,0,0,0.4);
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      font-size: 16px;
+      line-height: 1.7;
+      color: var(--text);
+      background: var(--bg);
+      transition: background 0.15s, color 0.15s;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; color: var(--accent-hover); }
+
+    /* ── 3-column layout (wide) ── */
+    .layout {
+      display: flex;
+      height: 100vh;
+    }
+
+    /* ── Sidebar ── */
+    #sidebar {
+      width: 14rem;
+      flex-shrink: 0;
+      background: var(--bg-sidebar);
+      border-right: 1px solid var(--border);
+      padding: 1.25rem 1rem;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 1.5rem;
+    }
+    .sidebar-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+    }
+    .sidebar-site-title {
+      font-weight: 700;
+      font-size: 1rem;
+      color: var(--text);
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .sidebar-site-title:hover { text-decoration: none; color: var(--accent); }
+    #theme-toggle {
+      flex-shrink: 0;
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.2rem 0.5rem;
+      font-size: 0.75rem;
+      color: var(--text-faint);
+      cursor: pointer;
+      transition: border-color 0.15s, color 0.15s;
+    }
+    #theme-toggle:hover { border-color: var(--accent); color: var(--accent); }
+
+    /* Search */
+    .search-wrap { position: relative; }
+    #search-input {
+      width: 100%;
+      padding: 0.4rem 0.7rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 0.85rem;
+      background: var(--bg);
+      color: var(--text);
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    #search-input:focus { border-color: var(--accent); }
+    #search-results {
+      position: absolute;
+      top: calc(100% + 4px);
+      left: 0; right: 0;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      box-shadow: 0 4px 12px var(--shadow);
+      z-index: 60;
+      max-height: 280px;
+      overflow-y: auto;
+    }
+    #search-results.hidden { display: none; }
+    .search-result-item {
+      display: block;
+      padding: 0.45rem 0.75rem;
+      font-size: 0.85rem;
+      color: var(--text);
+      border-bottom: 1px solid var(--border);
+    }
+    .search-result-item:last-child { border-bottom: none; }
+    .search-result-item:hover { background: var(--bg-card); color: var(--accent); text-decoration: none; }
+
+    /* Recent */
+    .sidebar-heading {
+      font-size: 0.68rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-faint);
+      margin-bottom: 0.5rem;
+    }
+    #recent-list { list-style: none; }
+    #recent-list li { margin-bottom: 0.35rem; }
+    #recent-list a { font-size: 0.85rem; color: var(--text-muted); }
+    #recent-list a:hover { color: var(--accent); text-decoration: none; }
+
+    /* ── Center: graph panel ── */
+    #graph-panel {
+      flex: 1;
+      min-width: 0;
+      position: relative;
+      background: var(--bg-graph);
+      border-right: 1px solid var(--border);
+      overflow: hidden;
+    }
+    #graph-canvas {
+      display: block;
+      position: absolute;
+      inset: 0;
+    }
+
+    /* ── Right: note content ── */
+    #content-panel {
+      width: 42rem;
+      flex-shrink: 0;
+      overflow-y: auto;
+    }
+    #main-content {
+      padding: 2rem 2.5rem 4rem;
+    }
+
+    /* Page header */
+    .page-header { margin-bottom: 1.75rem; }
+    .page-header h1 {
+      font-size: 1.75rem;
+      font-weight: 700;
+      line-height: 1.25;
+      margin-bottom: 0.6rem;
+    }
+    .page-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1rem;
+      font-size: 0.82rem;
+      color: var(--text-faint);
+    }
+
+    /* Article body */
+    article h2 { font-size: 1.25rem; font-weight: 600; margin: 1.8rem 0 0.6rem; }
+    article h3 { font-size: 1.05rem; font-weight: 600; margin: 1.5rem 0 0.5rem; }
+    article p  { margin-bottom: 1rem; }
+    article ul, article ol { margin: 0 0 1rem 1.5rem; }
+    article li { margin-bottom: 0.25rem; }
+    article blockquote {
+      border-left: 3px solid var(--border);
+      padding-left: 1rem;
+      color: var(--text-muted);
+      margin-bottom: 1rem;
+    }
+    article pre {
+      background: var(--code-bg);
+      border-radius: 6px;
+      padding: 1rem 1.2rem;
+      overflow-x: auto;
+      margin-bottom: 1rem;
+      font-size: 0.87rem;
+    }
+    article code {
+      background: var(--code-bg);
+      padding: 0.15em 0.4em;
+      border-radius: 3px;
+      font-size: 0.9em;
+    }
+    article pre code { background: none; padding: 0; }
+    article hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+    article table { border-collapse: collapse; margin-bottom: 1rem; width: 100%; }
+    article th, article td { border: 1px solid var(--border); padding: 0.4rem 0.7rem; text-align: left; }
+    article th { background: var(--bg-card); }
+
+    /* Backlinks */
+    .backlinks {
+      margin-top: 2.5rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid var(--border);
+    }
+    .section-heading {
+      font-size: 0.72rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-faint);
+      margin-bottom: 0.6rem;
+    }
+    .backlinks ul { list-style: none; }
+    .backlinks li { margin-bottom: 0.3rem; font-size: 0.9rem; }
+
+    /* History */
+    .history {
+      margin-top: 2.5rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid var(--border);
+    }
+    .commit-entry {
+      margin-bottom: 0.5rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    .commit-entry summary {
+      cursor: pointer;
+      padding: 0.55rem 0.9rem;
+      font-size: 0.85rem;
+      background: var(--bg-card);
+      user-select: none;
+      list-style: none;
+      display: flex;
+      gap: 0.75rem;
+      align-items: baseline;
+    }
+    .commit-entry summary::-webkit-details-marker { display: none; }
+    .commit-date { color: var(--text-faint); font-size: 0.8rem; white-space: nowrap; }
+    .commit-msg { flex: 1; font-weight: 500; }
+    .commit-author { color: var(--text-muted); font-size: 0.8rem; }
+    pre.diff {
+      font-family: 'SFMono-Regular', Consolas, 'Courier New', monospace;
+      font-size: 0.78rem;
+      line-height: 1.5;
+      overflow-x: auto;
+      padding: 0.75rem 1rem;
+      background: var(--bg);
+      margin: 0;
+    }
+    pre.diff .diff-add { color: var(--diff-add); }
+    pre.diff .diff-remove { color: var(--diff-remove); }
+    pre.diff .diff-hunk { color: var(--diff-hunk); }
+
+    /* ── Narrow screens: 2-column (sidebar + content, no graph) ── */
+    @media (max-width: 1024px) {
+      #graph-panel { display: none; }
+      #content-panel { width: auto; flex: 1; }
+    }
+    @media (max-width: 720px) {
+      .layout { flex-direction: column; height: auto; }
+      #sidebar {
+        width: 100%;
+        height: auto;
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+        flex-direction: row;
+        flex-wrap: wrap;
+        padding: 0.75rem 1rem;
+        gap: 0.75rem;
+      }
+      .sidebar-top { width: 100%; }
+      #content-panel { overflow-y: visible; }
+      #main-content { padding: 1.25rem 1rem 3rem; }
+    }
+  </style>
+</head>
+<body>
+  <script id="site-data" type="application/json">{{ site_graph | json_encode | safe }}</script>
+
+  <div class="layout">
+
+    <!-- Left: sidebar -->
+    <aside id="sidebar">
+      <div class="sidebar-top">
+        <a class="sidebar-site-title" href="/">{{ vars.site_title | default(value="mycells") }}</a>
+        <button id="theme-toggle" aria-label="Toggle theme">Dark</button>
+      </div>
+
+      <div class="search-wrap">
+        <input type="text" id="search-input" placeholder="Search pages…" autocomplete="off">
+        <div id="search-results" class="hidden"></div>
+      </div>
+
+      {% if recent_pages %}
+      <div>
+        <div class="sidebar-heading">Recent</div>
+        <ul id="recent-list">
+          {% for p in recent_pages %}
+          <li><a href="{{ p.url }}">{{ p.title }}</a></li>
+          {% endfor %}
+        </ul>
+      </div>
+      {% endif %}
+    </aside>
+
+    <!-- Center: graph -->
+    <div id="graph-panel">
+      <canvas id="graph-canvas"></canvas>
+    </div>
+
+    <!-- Right: note content -->
+    <div id="content-panel">
+      <div id="main-content" data-page-id="{{ page.id }}">
+        <header class="page-header">
+          <h1>{{ page.title }}</h1>
+          <div class="page-meta">
+            {% if page.date_formatted %}<span>Created {{ page.date_formatted }}</span>{% endif %}
+            {% if page.last_modified %}<span>Updated {{ page.last_modified }}</span>{% endif %}
+          </div>
+        </header>
+
+        <article>
+          {{ page.body_without_title | safe }}
+        </article>
+
+        {% if page.backlinks %}
+        <section class="backlinks">
+          <div class="section-heading">Backlinks</div>
+          <ul>
+            {% for link in page.backlinks %}
+            <li><a href="{{ link.url }}">{{ link.title }}</a></li>
+            {% endfor %}
+          </ul>
+        </section>
+        {% endif %}
+
+        {% if page.history %}
+        <section class="history">
+          <div class="section-heading">Change history</div>
+          {% for commit in page.history %}
+          <details class="commit-entry">
+            <summary>
+              <span class="commit-date">{{ commit.author_date | truncate(length=10, end="") }}</span>
+              <span class="commit-msg">{{ commit.message }}</span>
+              <span class="commit-author">{{ commit.author }}</span>
+            </summary>
+            {% if commit.diff %}<pre class="diff">{{ commit.diff }}</pre>{% endif %}
+          </details>
+          {% endfor %}
+        </section>
+        {% endif %}
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+  (function () {
+    'use strict';
+
+    // ── State ─────────────────────────────────────────────────────────────────
+    var siteData = null;
+    var layout = null;
+    var currentPageId = null;
+    var graphDisplayW = 0, graphDisplayH = 0;
+
+    // ── Init ──────────────────────────────────────────────────────────────────
+    function init() {
+      try {
+        siteData = JSON.parse(document.getElementById('site-data').textContent);
+      } catch (e) {
+        siteData = { nodes: [], edges: [] };
+      }
+      currentPageId = getMainContent().dataset.pageId;
+      layout = computeLayout(siteData.nodes, siteData.edges);
+
+      setupTheme();
+      setupSearch();
+      setupGraph();
+      setupNavigation();
+      initPage();
+
+      history.replaceState({ url: location.href }, document.title, location.href);
+    }
+
+    function initPage() {
+      currentPageId = getMainContent().dataset.pageId;
+      colorizeDiffs();
+      redrawGraph();
+    }
+
+    function getMainContent() {
+      return document.getElementById('main-content');
+    }
+
+    // ── Theme ─────────────────────────────────────────────────────────────────
+    function setupTheme() {
+      var stored = localStorage.getItem('mcs-theme') || 'light';
+      applyTheme(stored);
+      document.getElementById('theme-toggle').addEventListener('click', function () {
+        var next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+        applyTheme(next);
+        localStorage.setItem('mcs-theme', next);
+      });
+    }
+
+    function applyTheme(theme) {
+      document.documentElement.dataset.theme = theme;
+      var btn = document.getElementById('theme-toggle');
+      if (btn) btn.textContent = theme === 'dark' ? 'Light' : 'Dark';
+      redrawGraph();
+    }
+
+    // ── Force layout ──────────────────────────────────────────────────────────
+    function computeLayout(nodes, edges) {
+      if (!nodes || nodes.length === 0) return {};
+      var n = nodes.length;
+      var pos = {};
+
+      nodes.forEach(function (node, i) {
+        var angle = 2 * Math.PI * i / n;
+        pos[node.id] = { x: Math.cos(angle), y: Math.sin(angle), vx: 0, vy: 0 };
+      });
+
+      var K_REP = 0.8, K_ATT = 0.08, REST = 0.6, DAMP = 0.85, DT = 0.05;
+      var ITERS = n > 80 ? 100 : 250;
+
+      for (var iter = 0; iter < ITERS; iter++) {
+        nodes.forEach(function (nd) { pos[nd.id].fx = 0; pos[nd.id].fy = 0; });
+
+        for (var i = 0; i < n; i++) {
+          for (var j = i + 1; j < n; j++) {
+            var a = pos[nodes[i].id], b = pos[nodes[j].id];
+            var dx = b.x - a.x, dy = b.y - a.y;
+            var d2 = dx*dx + dy*dy + 0.0001, d = Math.sqrt(d2);
+            var f = K_REP / d2, fx = f*dx/d, fy = f*dy/d;
+            a.fx -= fx; a.fy -= fy; b.fx += fx; b.fy += fy;
+          }
+        }
+        edges.forEach(function (e) {
+          var a = pos[e.source], b = pos[e.target];
+          if (!a || !b) return;
+          var dx = b.x - a.x, dy = b.y - a.y;
+          var d = Math.sqrt(dx*dx + dy*dy) + 0.0001;
+          var f = K_ATT * (d - REST), fx = f*dx/d, fy = f*dy/d;
+          a.fx += fx; a.fy += fy; b.fx -= fx; b.fy -= fy;
+        });
+        nodes.forEach(function (nd) {
+          var p = pos[nd.id];
+          p.vx = (p.vx + p.fx * DT) * DAMP;
+          p.vy = (p.vy + p.fy * DT) * DAMP;
+          p.x += p.vx; p.y += p.vy;
+        });
+      }
+
+      var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+      nodes.forEach(function (nd) {
+        var p = pos[nd.id];
+        if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+        if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
+      });
+      var rx = maxX - minX || 1, ry = maxY - minY || 1;
+      nodes.forEach(function (nd) {
+        var p = pos[nd.id];
+        p.nx = 0.05 + 0.9 * (p.x - minX) / rx;
+        p.ny = 0.05 + 0.9 * (p.y - minY) / ry;
+      });
+      return pos;
+    }
+
+    // ── Graph drawing ─────────────────────────────────────────────────────────
+    function getColors() {
+      var dark = document.documentElement.dataset.theme === 'dark';
+      return {
+        bg:          dark ? '#161616' : '#fafafa',
+        edge:        dark ? '#3a3a3a' : '#ddd',
+        node:        dark ? '#2a3d52' : '#c8d8ec',
+        nodeStroke:  dark ? '#4d7aa8' : '#7aa8d4',
+        current:     dark ? '#4d9fff' : '#0066cc',
+        currentGlow: dark ? 'rgba(77,159,255,0.25)' : 'rgba(0,102,204,0.15)',
+        text:        dark ? '#aaa'    : '#555',
+        textCurrent: dark ? '#e0e0e0' : '#111',
+      };
+    }
+
+    function drawGraphToCanvas(canvas, W, H) {
+      var dpr = window.devicePixelRatio || 1;
+      canvas.width = W * dpr;
+      canvas.height = H * dpr;
+      canvas.style.width = W + 'px';
+      canvas.style.height = H + 'px';
+      var ctx = canvas.getContext('2d');
+      ctx.scale(dpr, dpr);
+
+      var pad = 56;
+      var c = getColors();
+      ctx.fillStyle = c.bg;
+      ctx.fillRect(0, 0, W, H);
+
+      if (!layout || !siteData || siteData.nodes.length === 0) return;
+
+      var toX = function (nx) { return pad + nx * (W - 2*pad); };
+      var toY = function (ny) { return pad + ny * (H - 2*pad); };
+
+      // Edges
+      ctx.strokeStyle = c.edge;
+      ctx.lineWidth = 1;
+      siteData.edges.forEach(function (e) {
+        var a = layout[e.source], b = layout[e.target];
+        if (!a || !b) return;
+        ctx.beginPath();
+        ctx.moveTo(toX(a.nx), toY(a.ny));
+        ctx.lineTo(toX(b.nx), toY(b.ny));
+        ctx.stroke();
+      });
+
+      // Nodes
+      var R = 7;
+      siteData.nodes.forEach(function (nd) {
+        var p = layout[nd.id];
+        if (!p) return;
+        var x = toX(p.nx), y = toY(p.ny);
+        var isCurrent = nd.id === currentPageId;
+
+        if (isCurrent) {
+          ctx.beginPath();
+          ctx.arc(x, y, R + 5, 0, 2*Math.PI);
+          ctx.fillStyle = c.currentGlow;
+          ctx.fill();
+        }
+
+        ctx.beginPath();
+        ctx.arc(x, y, R, 0, 2*Math.PI);
+        ctx.fillStyle = isCurrent ? c.current : c.node;
+        ctx.fill();
+        ctx.strokeStyle = c.nodeStroke;
+        ctx.lineWidth = isCurrent ? 2 : 1;
+        ctx.stroke();
+
+        var label = nd.title.length > 20 ? nd.title.slice(0, 20) + '…' : nd.title;
+        ctx.fillStyle = isCurrent ? c.textCurrent : c.text;
+        ctx.font = (isCurrent ? 'bold ' : '') + '11px system-ui';
+        ctx.fillText(label, x + R + 5, y + 4);
+      });
+    }
+
+    function hitTest(W, H, mx, my) {
+      if (!layout || !siteData) return null;
+      var pad = 56;
+      var toX = function (nx) { return pad + nx * (W - 2*pad); };
+      var toY = function (ny) { return pad + ny * (H - 2*pad); };
+      for (var i = 0; i < siteData.nodes.length; i++) {
+        var nd = siteData.nodes[i];
+        var p = layout[nd.id];
+        if (!p) continue;
+        var dx = mx - toX(p.nx), dy = my - toY(p.ny);
+        if (dx*dx + dy*dy < 144) return nd; // r=12px hit area
+      }
+      return null;
+    }
+
+    // ── Graph panel ───────────────────────────────────────────────────────────
+    function setupGraph() {
+      var panel = document.getElementById('graph-panel');
+      var canvas = document.getElementById('graph-canvas');
+
+      function resize() {
+        graphDisplayW = panel.clientWidth;
+        graphDisplayH = panel.clientHeight;
+        drawGraphToCanvas(canvas, graphDisplayW, graphDisplayH);
+      }
+
+      window.addEventListener('resize', function () {
+        if (panel.offsetParent !== null) resize();
+      });
+
+      canvas.addEventListener('mousemove', function (e) {
+        if (!graphDisplayW) return;
+        var rect = canvas.getBoundingClientRect();
+        var nd = hitTest(graphDisplayW, graphDisplayH, e.clientX - rect.left, e.clientY - rect.top);
+        canvas.style.cursor = nd ? 'pointer' : 'default';
+      });
+
+      canvas.addEventListener('click', function (e) {
+        if (!graphDisplayW) return;
+        var rect = canvas.getBoundingClientRect();
+        var nd = hitTest(graphDisplayW, graphDisplayH, e.clientX - rect.left, e.clientY - rect.top);
+        if (nd) navigate(nd.url);
+      });
+
+      resize();
+    }
+
+    function redrawGraph() {
+      var panel = document.getElementById('graph-panel');
+      var canvas = document.getElementById('graph-canvas');
+      if (!panel || panel.offsetParent === null) return;
+      graphDisplayW = panel.clientWidth;
+      graphDisplayH = panel.clientHeight;
+      drawGraphToCanvas(canvas, graphDisplayW, graphDisplayH);
+    }
+
+    // ── Search ────────────────────────────────────────────────────────────────
+    function setupSearch() {
+      var input = document.getElementById('search-input');
+      var results = document.getElementById('search-results');
+
+      input.addEventListener('input', function () {
+        var q = input.value.trim().toLowerCase();
+        if (!q) { results.classList.add('hidden'); return; }
+        var hits = (siteData ? siteData.nodes : [])
+          .filter(function (nd) {
+            return nd.title.toLowerCase().includes(q) || nd.text.toLowerCase().includes(q);
+          })
+          .slice(0, 12);
+        if (!hits.length) { results.classList.add('hidden'); return; }
+        results.innerHTML = hits.map(function (nd) {
+          return '<a class="search-result-item" href="' + escHtml(nd.url) + '">' + escHtml(nd.title) + '</a>';
+        }).join('');
+        results.classList.remove('hidden');
+      });
+
+      input.addEventListener('blur', function () {
+        setTimeout(function () { results.classList.add('hidden'); }, 200);
+      });
+    }
+
+    // ── SPA Navigation ────────────────────────────────────────────────────────
+    function setupNavigation() {
+      document.addEventListener('click', function (e) {
+        var link = e.target.closest('a');
+        if (!link || !link.href) return;
+        var url;
+        try { url = new URL(link.href); } catch (_) { return; }
+        if (url.origin !== location.origin) return;
+        if (link.target === '_blank') return;
+        if (url.pathname === location.pathname && url.hash) return;
+        e.preventDefault();
+        navigate(link.href);
+      });
+
+      window.addEventListener('popstate', function (e) {
+        if (e.state && e.state.url) navigate(e.state.url, false);
+      });
+    }
+
+    function navigate(url, pushState) {
+      if (typeof pushState === 'undefined') pushState = true;
+      fetch(url)
+        .then(function (r) {
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          return r.text();
+        })
+        .then(function (html) {
+          var parser = new DOMParser();
+          var doc = parser.parseFromString(html, 'text/html');
+          var newMain = doc.getElementById('main-content');
+          var oldMain = getMainContent();
+          if (newMain && oldMain) oldMain.replaceWith(newMain);
+          document.title = doc.title;
+          var newRecent = doc.getElementById('recent-list');
+          var oldRecent = document.getElementById('recent-list');
+          if (newRecent && oldRecent) oldRecent.replaceWith(newRecent);
+          if (pushState) history.pushState({ url: url }, doc.title, url);
+          document.getElementById('content-panel').scrollTo(0, 0);
+          initPage();
+        })
+        .catch(function () { location.href = url; });
+    }
+
+    // ── Diff colorization ─────────────────────────────────────────────────────
+    function colorizeDiffs() {
+      document.querySelectorAll('pre.diff').forEach(function (pre) {
+        var lines = pre.textContent.split('\n');
+        pre.innerHTML = lines.map(function (line) {
+          var cls = '';
+          if (line.startsWith('+') && !line.startsWith('+++')) cls = 'diff-add';
+          else if (line.startsWith('-') && !line.startsWith('---')) cls = 'diff-remove';
+          else if (line.startsWith('@@')) cls = 'diff-hunk';
+          return cls
+            ? '<span class="' + cls + '">' + escHtml(line) + '</span>'
+            : '<span>' + escHtml(line) + '</span>';
+        }).join('\n');
+      });
+    }
+
+    function escHtml(s) {
+      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', init);
+    } else {
+      init();
+    }
+  })();
+  </script>
+</body>
+</html>
