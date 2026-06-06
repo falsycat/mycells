@@ -188,13 +188,6 @@ pub fn build_graph(site: &Site) -> SiteGraphCtx {
 
 // ── Context building ──────────────────────────────────────────────────────────
 
-fn format_date(date: &str) -> String {
-    if date.len() == 8 {
-        format!("{}-{}-{}", &date[0..4], &date[4..6], &date[6..8])
-    } else {
-        date.to_string()
-    }
-}
 
 fn build_site_nodes(site: &Site) -> Vec<SiteNodeCtx> {
     site.all_cells()
@@ -262,8 +255,8 @@ fn build_context(
         page: PageCtx {
             id: cell.id.clone(),
             slug: cell.slug.clone(),
-            date: cell.date.clone(),
-            date_formatted: format_date(&cell.date),
+            date: cell.created_date().to_string(),
+            date_formatted: cell.created_date().to_string(),
             last_modified,
             title: cell.title.clone(),
             url: cell.url(),

@@ -3,10 +3,10 @@ use regex::Regex;
 use std::sync::LazyLock;
 
 static LINK_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\[\[(\d{10})\]\]").unwrap());
+    LazyLock::new(|| Regex::new(r"\[\[(\d+)\]\]").unwrap());
 
 static FILENAME_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(\d{8})(\d{2})-([a-z0-9][a-z0-9-]*)\.md$").unwrap());
+    LazyLock::new(|| Regex::new(r"^(\d+)-([a-z0-9][a-z0-9-]*)\.md$").unwrap());
 
 static TAG_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?m)(?:^|[\s,;:.!?()\[\]{}'"])#([A-Za-z][A-Za-z0-9_-]*)"#).unwrap()
@@ -16,7 +16,6 @@ static TAG_RE: LazyLock<Regex> = LazyLock::new(|| {
 pub struct Cell {
     pub id: String,
     pub slug: String,
-    pub date: String,
     pub title: String,
     pub raw: Box<str>,
     pub plain_text: String,
@@ -35,7 +34,6 @@ impl Cell {
             Some(Cell {
                 id: "index".to_string(),
                 slug: String::new(),
-                date: String::new(),
                 title,
                 raw: content.to_string().into_boxed_str(),
                 plain_text,
@@ -45,10 +43,8 @@ impl Cell {
             })
         } else {
             let caps = FILENAME_RE.captures(filename)?;
-            let date = caps[1].to_string();
-            let seq = &caps[2];
-            let slug = caps[3].to_string();
-            let id = format!("{}{}", date, seq);
+            let id = caps[1].to_string();
+            let slug = caps[2].to_string();
             let title = extract_title(content)?;
             let plain_text = extract_plain_text(content);
             let outlinks = extract_outlinks(content);
@@ -56,7 +52,6 @@ impl Cell {
             Some(Cell {
                 id,
                 slug,
-                date,
                 title,
                 raw: content.to_string().into_boxed_str(),
                 plain_text,
@@ -65,6 +60,13 @@ impl Cell {
                 history: vec![],
             })
         }
+    }
+
+    pub fn created_date(&self) -> &str {
+        self.history
+            .last()
+            .and_then(|c| c.author_date.get(..10))
+            .unwrap_or("")
     }
 
     pub fn url(&self) -> String {

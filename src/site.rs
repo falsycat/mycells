@@ -18,7 +18,7 @@ impl PageRef {
         PageRef {
             id: cell.id.clone(),
             slug: cell.slug.clone(),
-            date: cell.date.clone(),
+            date: cell.created_date().to_string(),
             title: cell.title.clone(),
             url: cell.url(),
             tags: cell.tags.clone(),
