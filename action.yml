@@ -1,0 +1,53 @@
+name: 'Build mycells site'
+description: 'Compile mcs and build a static site from your cells directory'
+branding:
+  icon: 'book'
+  color: 'blue'
+
+inputs:
+  cells:
+    description: 'Path to the cells directory'
+    required: false
+    default: '.'
+  output:
+    description: 'Output directory for the built site'
+    required: false
+    default: 'dist'
+  template:
+    description: 'Path to a custom Tera template directory (must contain page.html)'
+    required: false
+    default: ''
+  extra-args:
+    description: 'Extra arguments forwarded verbatim to mcs build (e.g. --var KEY=VALUE)'
+    required: false
+    default: ''
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Cache cargo artifacts
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry/index
+          ~/.cargo/registry/cache
+          ~/.cargo/git/db
+          ${{ github.action_path }}/target
+        key: mcs-${{ runner.os }}-${{ hashFiles(format('{0}/Cargo.lock', github.action_path)) }}
+        restore-keys: mcs-${{ runner.os }}-
+
+    - name: Build and install mcs
+      shell: bash
+      env:
+        CARGO_TARGET_DIR: ${{ github.action_path }}/target
+      run: cargo install --path "${{ github.action_path }}" --locked
+
+    - name: Run mcs build
+      shell: bash
+      run: |
+        args=(--cells "${{ inputs.cells }}" --output "${{ inputs.output }}")
+        [[ -n "${{ inputs.template }}" ]] && args+=(--template "${{ inputs.template }}")
+        mcs build "${args[@]}" ${{ inputs.extra-args }}
