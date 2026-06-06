@@ -45,11 +45,10 @@ pub fn file_history(repo_root: &Path, rel_path: &Path) -> Vec<GitCommit> {
             Err(_) => continue,
         };
 
-        if !commit_touches_file(&repo, &commit, rel_path) {
-            continue;
-        }
-
-        let diff = commit_file_diff(&repo, &commit, rel_path);
+        let diff = match try_commit_file_diff(&repo, &commit, rel_path) {
+            Some(d) => d,
+            None => continue,
+        };
         let author = commit.author();
         let author_name = author.name().unwrap_or("").to_string();
         let author_date = {
@@ -80,57 +79,35 @@ pub fn file_history(repo_root: &Path, rel_path: &Path) -> Vec<GitCommit> {
     commits
 }
 
-fn commit_touches_file(repo: &git2::Repository, commit: &git2::Commit, rel_path: &Path) -> bool {
-    let new_tree = match commit.tree() {
-        Ok(t) => t,
-        Err(_) => return false,
-    };
-
-    let old_tree = commit
-        .parent(0)
-        .ok()
-        .and_then(|p| p.tree().ok());
+fn try_commit_file_diff(
+    repo: &git2::Repository,
+    commit: &git2::Commit,
+    rel_path: &Path,
+) -> Option<String> {
+    let new_tree = commit.tree().ok()?;
+    let old_tree = commit.parent(0).ok().and_then(|p| p.tree().ok());
 
     let mut diff_opts = git2::DiffOptions::new();
     diff_opts.pathspec(rel_path);
 
-    let diff = match repo.diff_tree_to_tree(
-        old_tree.as_ref(),
-        Some(&new_tree),
-        Some(&mut diff_opts),
-    ) {
-        Ok(d) => d,
-        Err(_) => return false,
-    };
+    let diff = repo
+        .diff_tree_to_tree(old_tree.as_ref(), Some(&new_tree), Some(&mut diff_opts))
+        .ok()?;
 
-    diff.stats().map(|s| s.files_changed() > 0).unwrap_or(false)
-}
-
-fn commit_file_diff(repo: &git2::Repository, commit: &git2::Commit, rel_path: &Path) -> String {
-    let new_tree = match commit.tree() {
-        Ok(t) => t,
-        Err(_) => return String::new(),
-    };
-
-    let old_tree = commit
-        .parent(0)
-        .ok()
-        .and_then(|p| p.tree().ok());
-
-    let mut diff_opts = git2::DiffOptions::new();
-    diff_opts.pathspec(rel_path);
-
-    let diff = match repo.diff_tree_to_tree(
-        old_tree.as_ref(),
-        Some(&new_tree),
-        Some(&mut diff_opts),
-    ) {
-        Ok(d) => d,
-        Err(_) => return String::new(),
-    };
+    // stats() can be unreliable; count deltas directly.
+    let touches = diff
+        .deltas()
+        .any(|d| d.new_file().path() == Some(rel_path) || d.old_file().path() == Some(rel_path));
+    if !touches {
+        return None;
+    }
 
     let mut output = String::new();
-    diff.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
+    diff.print(git2::DiffFormat::Patch, |delta, _hunk, line| {
+        // Restrict output to the target file in case pathspec filtering is partial.
+        if delta.new_file().path() != Some(rel_path) && delta.old_file().path() != Some(rel_path) {
+            return true;
+        }
         let origin = line.origin();
         match origin {
             '+' | '-' | ' ' => output.push(origin),
@@ -141,11 +118,13 @@ fn commit_file_diff(repo: &git2::Repository, commit: &git2::Commit, rel_path: &P
         }
         true
     })
-    .ok();
+    .ok()?;
 
     let output = output.trim_end().to_string();
-    if output.len() > 8192 {
-        // find a char boundary to safely truncate
+    if output.is_empty() {
+        return None;
+    }
+    Some(if output.len() > 8192 {
         let mut end = 8192;
         while !output.is_char_boundary(end) {
             end -= 1;
@@ -153,7 +132,7 @@ fn commit_file_diff(repo: &git2::Repository, commit: &git2::Commit, rel_path: &P
         format!("{}…(truncated)", &output[..end])
     } else {
         output
-    }
+    })
 }
 
 fn format_unix_time(secs: i64) -> String {
