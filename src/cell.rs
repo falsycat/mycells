@@ -8,6 +8,10 @@ static LINK_RE: LazyLock<Regex> =
 static FILENAME_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^(\d{8})(\d{2})-([a-z0-9][a-z0-9-]*)\.md$").unwrap());
 
+static TAG_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?m)(?:^|[\s,;:.!?()\[\]{}'"])#([A-Za-z][A-Za-z0-9_-]*)"#).unwrap()
+});
+
 #[derive(Debug, Clone)]
 pub struct Cell {
     pub id: String,
@@ -17,6 +21,7 @@ pub struct Cell {
     pub raw: Box<str>,
     pub plain_text: String,
     pub outlinks: Vec<String>,
+    pub tags: Vec<String>,
     pub history: Vec<crate::git::GitCommit>,
 }
 
@@ -26,6 +31,7 @@ impl Cell {
             let title = extract_title(content)?;
             let plain_text = extract_plain_text(content);
             let outlinks = extract_outlinks(content);
+            let tags = extract_tags(content);
             Some(Cell {
                 id: "index".to_string(),
                 slug: String::new(),
@@ -34,6 +40,7 @@ impl Cell {
                 raw: content.to_string().into_boxed_str(),
                 plain_text,
                 outlinks,
+                tags,
                 history: vec![],
             })
         } else {
@@ -45,6 +52,7 @@ impl Cell {
             let title = extract_title(content)?;
             let plain_text = extract_plain_text(content);
             let outlinks = extract_outlinks(content);
+            let tags = extract_tags(content);
             Some(Cell {
                 id,
                 slug,
@@ -53,6 +61,7 @@ impl Cell {
                 raw: content.to_string().into_boxed_str(),
                 plain_text,
                 outlinks,
+                tags,
                 history: vec![],
             })
         }
@@ -89,6 +98,16 @@ fn extract_title(content: &str) -> Option<String> {
     } else {
         Some(title)
     }
+}
+
+pub fn extract_tags(content: &str) -> Vec<String> {
+    let mut tags: Vec<String> = TAG_RE
+        .captures_iter(content)
+        .map(|c| c[1].to_lowercase())
+        .collect();
+    tags.sort();
+    tags.dedup();
+    tags
 }
 
 pub fn extract_outlinks(content: &str) -> Vec<String> {

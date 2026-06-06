@@ -10,6 +10,7 @@ pub struct PageRef {
     pub date: String,
     pub title: String,
     pub url: String,
+    pub tags: Vec<String>,
 }
 
 impl PageRef {
@@ -20,6 +21,7 @@ impl PageRef {
             date: cell.date.clone(),
             title: cell.title.clone(),
             url: cell.url(),
+            tags: cell.tags.clone(),
         }
     }
 }

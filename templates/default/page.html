@@ -153,9 +153,42 @@
       margin-bottom: 0.5rem;
     }
     #recent-list { list-style: none; }
-    #recent-list li { margin-bottom: 0.35rem; }
-    #recent-list a { font-size: 0.85rem; color: var(--text-muted); line-height: 1.3; display: block; }
-    #recent-list a:hover { color: var(--accent); text-decoration: none; }
+    #recent-list li {
+      margin-bottom: 0.2rem;
+      border-radius: 5px;
+      padding: 0.2rem 0.4rem;
+      cursor: pointer;
+      max-height: 2.8em;
+      overflow: hidden;
+    }
+    #recent-list li:hover { background: var(--bg-card); }
+    #recent-list li.is-current { background: color-mix(in srgb, var(--accent) 10%, var(--bg-sidebar)); }
+    #recent-list .item-title {
+      font-size: 0.83rem;
+      color: var(--text-muted);
+      line-height: 1.3;
+      display: block;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    #recent-list li:hover .item-title { color: var(--accent); text-decoration: none; }
+    #recent-list li.is-current .item-title { color: var(--text); font-weight: 600; }
+    .item-tags { display: flex; flex-wrap: nowrap; gap: 0.2rem; margin-top: 0.1rem; overflow: hidden; }
+
+    /* Tags */
+    .tag {
+      display: inline-block;
+      font-size: 0.75em;
+      font-weight: 500;
+      color: var(--accent);
+      background: var(--code-bg);
+      padding: 0.05em 0.4em;
+      border-radius: 3px;
+      line-height: 1.5;
+      white-space: nowrap;
+    }
+    .item-tags .tag { font-size: 0.7em; }
 
     /* ── Center: graph panel ── */
     #graph-panel {
@@ -339,7 +372,12 @@
         <div class="sidebar-heading">Recent</div>
         <ul id="recent-list">
           {% for p in recent_pages %}
-          <li><a href="{{ p.url }}">{{ p.title }}</a></li>
+          <li data-node-id="{{ p.id }}">
+            <a href="{{ p.url }}" class="item-title">{{ p.title }}</a>
+            {% if p.tags %}
+            <div class="item-tags">{% for tag in p.tags %}<span class="tag">#{{ tag }}</span>{% endfor %}</div>
+            {% endif %}
+          </li>
           {% endfor %}
         </ul>
       </div>
@@ -417,6 +455,7 @@
     var hoveredNodeId = null;
     var degreeMap = {};
     var communityMap = {};
+    var tagColorMap = {};
     var globalPos = null;
     var globalBounds = null;
     var globalCommunityMap = null;
@@ -438,6 +477,7 @@
       setupSearch();
       setupGraph();
       setupNavigation();
+      setupSidebarHover();
       initPage();
 
       history.replaceState({ url: location.href }, document.title, location.href);
@@ -449,6 +489,13 @@
       colorizeDiffs();
       setupLinkHighlight();
       fetchGraphAndDraw();
+      updateSidebarHighlight();
+    }
+
+    function updateSidebarHighlight() {
+      document.querySelectorAll('#recent-list li[data-node-id]').forEach(function (li) {
+        li.classList.toggle('is-current', li.dataset.nodeId === currentPageId);
+      });
     }
 
     function getMainContent() {
@@ -469,7 +516,7 @@
 
     // Build a local subgraph via BFS from pageId, up to MAX_NODES nodes.
     var BFS_MAX = 1000;
-    function buildLocalGraph(graph, pageId) {
+    function buildLocalGraph(graph, seedIds) {
       var nodeMap = {};
       graph.nodes.forEach(function (n) { nodeMap[n.id] = n; });
 
@@ -481,8 +528,13 @@
       });
 
       var visited = new Set();
-      var queue = [pageId];
-      visited.add(pageId);
+      var queue = [];
+      seedIds.forEach(function (id) {
+        if (nodeMap[id] && !visited.has(id)) {
+          visited.add(id);
+          queue.push(id);
+        }
+      });
 
       while (queue.length > 0 && visited.size < BFS_MAX) {
         var cur = queue.shift();
@@ -509,7 +561,42 @@
       return { nodes: nodes, edges: edges };
     }
 
+    // For the index page, collect node IDs linked from the page content.
+    function getIndexSeedIds(graph) {
+      var nodesByUrl = {};
+      graph.nodes.forEach(function (n) { nodesByUrl[n.url] = n.id; });
+      var seeds = [];
+      var links = document.querySelectorAll('#main-content a[href]');
+      links.forEach(function (a) {
+        var href = a.getAttribute('href');
+        var id = href && nodesByUrl[href];
+        if (id && seeds.indexOf(id) === -1) seeds.push(id);
+      });
+      return seeds;
+    }
+
+    function getSeedIds(graph) {
+      if (currentPageId === 'index') {
+        var seeds = getIndexSeedIds(graph);
+        return seeds.length > 0 ? seeds : graph.nodes.slice(0, 1).map(function (n) { return n.id; });
+      }
+      return [currentPageId];
+    }
+
     var COMMUNITY_HUES = [210, 150, 30, 280, 10, 185, 340, 55, 120, 255];
+
+    function buildTagColorMap(nodes) {
+      var allTags = [];
+      nodes.forEach(function (nd) {
+        if (nd.tags) nd.tags.forEach(function (t) {
+          if (allTags.indexOf(t) < 0) allTags.push(t);
+        });
+      });
+      allTags.sort();
+      var map = {};
+      allTags.forEach(function (t, i) { map[t] = COMMUNITY_HUES[i % COMMUNITY_HUES.length]; });
+      return map;
+    }
 
     function buildCommunities(nodes, edges) {
       var labels = {};
@@ -581,15 +668,17 @@
 
     function fetchGraphAndDraw() {
       getFullGraph().then(function (graph) {
-        var newLocal = buildLocalGraph(graph, currentPageId);
+        var seedIds = getSeedIds(graph);
+        var newLocal = buildLocalGraph(graph, seedIds);
         degreeMap = buildDegreeMap(newLocal.nodes, newLocal.edges);
         if (!globalCommunityMap) {
           globalCommunityMap = buildCommunities(graph.nodes, graph.edges);
+          tagColorMap = buildTagColorMap(graph.nodes);
         }
         communityMap = globalCommunityMap;
 
         if (!globalPos) {
-          globalPos = computeRawLayout(newLocal.nodes, newLocal.edges, currentPageId);
+          globalPos = computeRawLayout(newLocal.nodes, newLocal.edges, seedIds[0]);
           // Compute fixed bounds once so the normalised layout stays stable.
           var allIds = Object.keys(globalPos);
           var xs = allIds.map(function (id) { return globalPos[id].x; });
@@ -613,7 +702,7 @@
           graphDisplayW = panel.clientWidth;
           graphDisplayH = panel.clientHeight;
           viewZoom = defaultViewZoom();
-          var gp = globalNodePos(currentPageId);
+          var gp = globalNodePos(seedIds[0]);
           panToGlobalPos(gp.nx, gp.ny);
           viewCXFrom = viewCX; viewCYFrom = viewCY; viewZoomFrom = viewZoom;
           if (loading) loading.style.display = 'none';
@@ -625,7 +714,7 @@
           layout     = newLayout;
           viewCXFrom = viewCX; viewCYFrom = viewCY; viewZoomFrom = viewZoom;
           if (viewZoom > 0) {
-            var gp = globalNodePos(currentPageId);
+            var gp = globalNodePos(seedIds[0]);
             panToGlobalPos(gp.nx, gp.ny);
           }
           animateLayout(400);
@@ -852,22 +941,40 @@
       ctx.fillStyle = c.bg;
       ctx.fillRect(0, 0, W, H);
 
-      // Dot-grid background — fills the whole panel so there's no blank void.
-      var dotStep = 28, dotR = 1.2;
+      var curCX   = viewCXFrom   + (viewCX   - viewCXFrom)   * animEase;
+      var curCY   = viewCYFrom   + (viewCY   - viewCYFrom)   * animEase;
+      var curZoom = viewZoomFrom + (viewZoom  - viewZoomFrom) * animEase;
+
+      // Dot-grid background — tiled in graph space so it pans/zooms with the viewport.
+      var dotR = 1.2;
       ctx.fillStyle = c.dotGrid;
-      for (var gx = dotStep / 2; gx < W; gx += dotStep) {
-        for (var gy = dotStep / 2; gy < H; gy += dotStep) {
-          ctx.beginPath();
-          ctx.arc(gx, gy, dotR, 0, 2 * Math.PI);
-          ctx.fill();
+      if (curZoom > 0) {
+        var dotStep = 0.05;
+        var leftEdge  = curCX - W / (2 * curZoom);
+        var rightEdge = curCX + W / (2 * curZoom);
+        var topEdge   = curCY - H / (2 * curZoom);
+        var botEdge   = curCY + H / (2 * curZoom);
+        var firstGX = Math.ceil(leftEdge  / dotStep) * dotStep;
+        var firstGY = Math.ceil(topEdge   / dotStep) * dotStep;
+        for (var gnx = firstGX; gnx <= rightEdge; gnx += dotStep) {
+          for (var gny = firstGY; gny <= botEdge; gny += dotStep) {
+            ctx.beginPath();
+            ctx.arc(W / 2 + (gnx - curCX) * curZoom, H / 2 + (gny - curCY) * curZoom, dotR, 0, 2 * Math.PI);
+            ctx.fill();
+          }
+        }
+      } else {
+        var dotStep = 28;
+        for (var gx = dotStep / 2; gx < W; gx += dotStep) {
+          for (var gy = dotStep / 2; gy < H; gy += dotStep) {
+            ctx.beginPath();
+            ctx.arc(gx, gy, dotR, 0, 2 * Math.PI);
+            ctx.fill();
+          }
         }
       }
 
       if (!layout || !localGraph || localGraph.nodes.length === 0) return;
-
-      var curCX   = viewCXFrom   + (viewCX   - viewCXFrom)   * animEase;
-      var curCY   = viewCYFrom   + (viewCY   - viewCYFrom)   * animEase;
-      var curZoom = viewZoomFrom + (viewZoom  - viewZoomFrom) * animEase;
       if (!curZoom) return;
       var toX = function (nx) { return W / 2 + (nx - curCX) * curZoom; };
       var toY = function (ny) { return H / 2 + (ny - curCY) * curZoom; };
@@ -914,7 +1021,8 @@
           ctx.fill();
         }
 
-        var hue = communityMap[nd.id];
+        var tagHue = (nd.tags && nd.tags.length > 0) ? tagColorMap[nd.tags[0]] : null;
+        var hue = tagHue != null ? tagHue : communityMap[nd.id];
         var dark = document.documentElement.dataset.theme === 'dark';
         var nodeFill   = hue != null ? (dark ? 'hsl('+hue+',38%,26%)' : 'hsl('+hue+',52%,76%)') : c.node;
         var nodeStroke = hue != null ? (dark ? 'hsl('+hue+',44%,46%)' : 'hsl('+hue+',46%,58%)') : c.nodeStroke;
@@ -1086,6 +1194,27 @@
       graphDisplayW = panel.clientWidth;
       graphDisplayH = panel.clientHeight;
       drawGraphToCanvas(canvas, graphDisplayW, graphDisplayH);
+    }
+
+    // ── Sidebar recent list hover → graph highlight ───────────────────────────
+    function setupSidebarHover() {
+      var sidebar = document.getElementById('sidebar');
+      sidebar.addEventListener('mouseover', function (e) {
+        var li = e.target.closest('#recent-list li[data-node-id]');
+        var newId = li ? li.dataset.nodeId : null;
+        if (newId !== highlightedNodeId) {
+          highlightedNodeId = newId;
+          hoveredNodeId = newId;
+          redrawGraph();
+        }
+      });
+      sidebar.addEventListener('mouseleave', function () {
+        if (highlightedNodeId !== null || hoveredNodeId !== null) {
+          highlightedNodeId = null;
+          hoveredNodeId = null;
+          redrawGraph();
+        }
+      });
     }
 
     // ── Link → graph highlight ────────────────────────────────────────────────
