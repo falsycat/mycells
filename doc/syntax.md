@@ -7,13 +7,12 @@ Each file is called a **cell**. All cells live flat in a single directory — no
 ### Filename
 
 ```
-YYYYMMDDXX-slug.md
+ID-slug.md
 ```
 
-There is one reserved filename: `index.md`. It is the top page of the site and does not follow the `YYYYMMDDXX-slug` naming convention.
+There is one reserved filename: `index.md`. It is the top page of the site and does not follow the `ID-slug` naming convention.
 
-- `YYYYMMDD` — date the cell was created
-- `XX` — two-digit sequence number starting at `01`, scoped to that date
+- `ID` — any sequence of digits; the recommended convention is `YYYYMMDDNN` (date + two-digit daily sequence starting at `01`)
 - `slug` — lowercase alphanumeric words separated by hyphens
 
 Examples:
@@ -25,7 +24,7 @@ Examples:
 
 ### ID
 
-The ID of a cell is the `YYYYMMDDXX` portion of its filename (10 characters).
+The ID of a cell is the leading numeric portion of its filename (everything before the first `-`).
 
 ## Cell Format
 
@@ -47,18 +46,44 @@ Not used. No YAML/TOML frontmatter blocks.
 
 Free-form Markdown. Standard formatting (bold, italic, lists, code blocks, etc.) is allowed.
 
+Bare `https://…` URLs in the body are automatically turned into clickable links when rendered.
+
 ## Links
 
-To link to another cell, use its ID wrapped in double brackets:
+To link to another cell, wrap its ID in double brackets:
 
 ```
-[[YYYYMMDDXX]]
+[[ID]]
 ```
 
-Example:
+To override the display text, add a pipe and the label:
+
+```
+[[ID|custom text]]
+```
+
+Without a pipe, the target cell's H1 title is used as the link label.
+
+Examples:
 
 ```markdown
-This idea builds on the principle described in [[2026053101]].
+This idea builds on [[2026053101]].
+See also [[2026053101|the atomic-notes principle]].
 ```
 
-Links can appear anywhere in the body. A link does not carry display text — the target cell's H1 title is used as the label when rendered.
+Links can appear anywhere in the body. All `[[ID]]` references are tracked; the linked cell sees this page in its backlinks.
+
+## Tags
+
+Write `#tagname` anywhere in the body to tag a cell:
+
+```markdown
+Note-taking is at the core of knowledge work. #zettelkasten #learning
+```
+
+Rules:
+
+- A tag starts with `#` followed by a letter, then any mix of letters, digits, `_`, or `-`.
+- Tags are normalized to **lowercase** and **deduplicated** per cell.
+- The tag set is available in templates as `page.tags` (array of strings).
+- `#` inside code spans, code blocks, or URLs is not treated as a tag.

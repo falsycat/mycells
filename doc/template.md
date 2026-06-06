@@ -18,10 +18,10 @@ my-theme/
 
 | Variable | Type | Description |
 |---|---|---|
-| `page.id` | string | Cell ID (`2026053101`), or `"index"` for the index page |
+| `page.id` | string | Cell ID (e.g. `2026053101`), or `"index"` for the index page |
 | `page.slug` | string | URL slug (`atomic-notes`), empty string for the index page |
-| `page.date` | string | Creation date `YYYYMMDD` (`20260531`), empty for the index page |
-| `page.date_formatted` | string | Creation date formatted as `YYYY-MM-DD` |
+| `page.date` | string | Creation date `YYYY-MM-DD` from git history, empty if not tracked |
+| `page.date_formatted` | string | Same as `page.date` |
 | `page.last_modified` | string | Date of most recent git commit (`YYYY-MM-DD`), empty if not tracked |
 | `page.title` | string | Plain-text H1 title |
 | `page.url` | string | Absolute URL path (`/atomic-notes/` or `/`) |
@@ -29,6 +29,7 @@ my-theme/
 | `page.body_without_title` | string (HTML) | Rendered HTML with the first H1 removed |
 | `page.backlinks` | array of **PageRef** | Pages that contain a `[[ID]]` link to this page |
 | `page.history` | array of **GitCommit** | Git commit history for this page's source file |
+| `page.tags` | array of strings | Tags extracted from `#tagname` markers in the body |
 
 `page.body` and `page.body_without_title` contain raw HTML — use the `| safe` filter to render them:
 
@@ -49,7 +50,7 @@ Contains all pages and links between them. Useful for embedding graph/search dat
 | `site_graph.nodes` | array of **SiteNode** | All pages in the site |
 | `site_graph.edges` | array of **SiteEdge** | All `[[ID]]` links between pages |
 
-**SiteNode** fields: `id`, `slug`, `title`, `url`, `text` (plain text for search).
+**SiteNode** fields: `id`, `slug`, `title`, `url`, `text` (plain text for search), `tags`.
 
 **SiteEdge** fields: `source` (page ID), `target` (page ID).
 
@@ -80,9 +81,10 @@ Used in `page.backlinks` and `recent_pages`.
 |---|---|---|
 | `id` | string | Cell ID |
 | `slug` | string | URL slug |
-| `date` | string | Creation date `YYYYMMDD` |
+| `date` | string | Creation date `YYYY-MM-DD` from git history |
 | `title` | string | Plain-text H1 title |
 | `url` | string | Absolute URL path |
+| `tags` | array of strings | Tags extracted from `#tagname` markers |
 
 ---
 
@@ -127,6 +129,14 @@ In serve mode, these are available at `/search.json` and `/graph.json`.
 
   <h1>{{ page.title }}</h1>
   {{ page.body_without_title | safe }}
+
+  {% if page.tags %}
+  <p>
+    {% for tag in page.tags %}
+    <span>#{{ tag }}</span>
+    {% endfor %}
+  </p>
+  {% endif %}
 
   {% if page.backlinks %}
   <section>
@@ -193,5 +203,5 @@ URL routing:
 | URL | Cell |
 |---|---|
 | `/` | `index.md` |
-| `/<slug>/` | `YYYYMMDDXX-<slug>.md` |
+| `/<slug>/` | `ID-<slug>.md` |
 | `/<slug>` | redirects to `/<slug>/` |

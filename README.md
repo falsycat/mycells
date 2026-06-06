@@ -7,7 +7,9 @@ Each note is a **cell** — a single Markdown file with a unique ID. Cells link 
 ## Features
 
 - Flat file structure — all notes live in one directory, no nested folders
-- Wiki-style `[[ID]]` links with automatic backlink tracking
+- Wiki-style `[[ID]]` and `[[ID|custom text]]` links with automatic backlink tracking
+- Hashtag-based tag system — `#tag` in body text auto-extracts tags
+- URL auto-linking — bare `https://…` URLs in body text become clickable links
 - Parallel HTML rendering
 - Live preview server (edits reflected immediately, no restart needed)
 - Git history per cell exposed to templates
@@ -41,12 +43,12 @@ cd my-notes
 Welcome to my notes.
 ```
 
-3. Create your first cell. The filename format is `YYYYMMDDXX-slug.md`:
+3. Create your first cell. The filename format is `ID-slug.md` where `ID` is any number (e.g. `YYYYMMDDNN`):
 
 ```markdown
 # The Principle of Atomic Notes
 
-One note, one idea.
+One note, one idea. #zettelkasten #learning
 ```
 
 Save it as `2026053101-atomic-notes.md`.
@@ -71,12 +73,11 @@ See [`doc/syntax.md`](doc/syntax.md) for the full specification. The essentials:
 ### Filename
 
 ```
-YYYYMMDDXX-slug.md
+ID-slug.md
 ```
 
-- `YYYYMMDD` — creation date
-- `XX` — two-digit sequence number per day, starting at `01`
-- `slug` — lowercase words separated by hyphens
+- `ID` — any sequence of digits; the recommended convention is `YYYYMMDDNN` (date + two-digit sequence)
+- `slug` — lowercase alphanumeric words separated by hyphens
 
 **Example:** `2026053101-atomic-notes.md`
 
@@ -90,13 +91,24 @@ The special file `index.md` is the site's home page and does not follow this nam
 
 ### Linking
 
-Link to another cell using its 10-character ID:
+Link to another cell using its ID. Optionally provide display text after `|`:
 
 ```markdown
 This idea builds on [[2026053101]].
+Or use custom text: [[2026053101|atomic notes]].
 ```
 
-The target cell's H1 title is used as the link label. Backlinks are tracked automatically and exposed in templates.
+Without a pipe, the target cell's H1 title is used as the link label. Backlinks are tracked automatically and exposed in templates.
+
+### Tags
+
+Write `#tagname` anywhere in the body to tag a cell. Tags are normalized to lowercase and deduplicated:
+
+```markdown
+This note covers note-taking strategies. #zettelkasten #learning
+```
+
+Tags are available in templates as `page.tags` (array of strings) and on `PageRef` objects.
 
 ## CLI Reference
 
