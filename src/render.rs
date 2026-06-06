@@ -345,9 +345,16 @@ fn resolve_links(content: &str, site: &Site) -> String {
     crate::cell::link_re()
         .replace_all(content, |caps: &regex::Captures| {
             let id = &caps[1];
+            let custom_text = caps.get(2).map(|m| m.as_str());
             match site.get_by_id(id) {
-                Some(cell) => format!("[{}]({})", cell.title, cell.url()),
-                None => format!("[[{id}]]"),
+                Some(cell) => {
+                    let text = custom_text.unwrap_or(&cell.title);
+                    format!("[{}]({})", text, cell.url())
+                }
+                None => match custom_text {
+                    Some(text) => format!("[{text}]()"),
+                    None => format!("[[{id}]]"),
+                },
             }
         })
         .into_owned()

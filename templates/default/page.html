@@ -268,6 +268,13 @@
     }
     article pre code { background: none; padding: 0; }
     article hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+    .mermaid-wrap { margin-bottom: 1rem; overflow-x: auto; text-align: center; }
+    .mermaid-wrap svg { max-width: 100%; height: auto; }
+    .mermaid-error {
+      background: var(--code-bg); border-radius: 6px; padding: 1rem;
+      color: var(--diff-remove); font-size: 0.85rem; margin-bottom: 1rem;
+      font-family: monospace; white-space: pre-wrap;
+    }
     article table { border-collapse: collapse; margin-bottom: 1rem; width: 100%; }
     article th, article td { border: 1px solid var(--border); padding: 0.4rem 0.7rem; text-align: left; }
     article th { background: var(--bg-card); }
@@ -444,6 +451,9 @@
     var fullGraph = null;
     var graphFetchPromise = null;
 
+    var hljsPromise = null;
+    var mermaidPromise = null;
+
     var localGraph = null;
     var layout     = null;   // target layout: { id → { nx, ny, ... } }
     var layoutFrom = null;   // starting layout for transition animation
@@ -487,6 +497,7 @@
       currentPageId = getMainContent().dataset.pageId;
       highlightedNodeId = null;
       colorizeDiffs();
+      applyCodeEnhancements();
       setupLinkHighlight();
       fetchGraphAndDraw();
       updateSidebarHighlight();
@@ -764,6 +775,8 @@
       var btn = document.getElementById('theme-toggle');
       if (btn) btn.textContent = theme === 'dark' ? 'Light' : 'Dark';
       redrawGraph();
+      updateHljsStyle();
+      if (mermaidPromise) mermaidPromise.then(rerenderMermaid);
     }
 
     // ── Force layout ───────────────────────────────────────────────────────────
@@ -1341,6 +1354,109 @@
 
     function escHtml(s) {
       return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    // ── Code block enhancements ───────────────────────────────────────────────
+
+    function loadScript(url) {
+      return new Promise(function (resolve, reject) {
+        var s = document.createElement('script');
+        s.src = url;
+        s.onload = resolve;
+        s.onerror = reject;
+        document.head.appendChild(s);
+      });
+    }
+
+    function ensureHljs() {
+      if (!hljsPromise) {
+        hljsPromise = loadScript('https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js');
+      }
+      return hljsPromise;
+    }
+
+    function updateHljsStyle() {
+      var dark = document.documentElement.dataset.theme === 'dark';
+      var light = document.getElementById('hljs-css-light');
+      var darkEl = document.getElementById('hljs-css-dark');
+      if (light)  light.disabled  = dark;
+      if (darkEl) darkEl.disabled = !dark;
+    }
+
+    function ensureHljsStyle() {
+      if (!document.getElementById('hljs-css-light')) {
+        var lk = document.createElement('link');
+        lk.id = 'hljs-css-light'; lk.rel = 'stylesheet';
+        lk.href = 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css';
+        document.head.appendChild(lk);
+      }
+      if (!document.getElementById('hljs-css-dark')) {
+        var lk = document.createElement('link');
+        lk.id = 'hljs-css-dark'; lk.rel = 'stylesheet';
+        lk.href = 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css';
+        document.head.appendChild(lk);
+      }
+      updateHljsStyle();
+    }
+
+    function ensureMermaid() {
+      if (!mermaidPromise) {
+        mermaidPromise = loadScript('https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js');
+      }
+      return mermaidPromise;
+    }
+
+    function rerenderMermaid() {
+      var dark = document.documentElement.dataset.theme === 'dark';
+      window.mermaid.initialize({ startOnLoad: false, theme: dark ? 'dark' : 'default' });
+      document.querySelectorAll('.mermaid-wrap[data-src]').forEach(function (div, i) {
+        window.mermaid.render('mermaid-tr-' + i + '-' + Date.now(), div.dataset.src)
+          .then(function (r) { div.innerHTML = r.svg; })
+          .catch(function () {});
+      });
+    }
+
+    function applyMermaidBlocks(container) {
+      var blocks = container.querySelectorAll('pre > code.language-mermaid');
+      if (!blocks.length) return;
+      var items = [];
+      blocks.forEach(function (code, i) {
+        var pre = code.parentElement;
+        var src = code.textContent;
+        var div = document.createElement('div');
+        div.className = 'mermaid-wrap';
+        div.dataset.src = src;
+        pre.parentNode.replaceChild(div, pre);
+        items.push({ div: div, src: src, i: i });
+      });
+      ensureMermaid().then(function () {
+        var dark = document.documentElement.dataset.theme === 'dark';
+        window.mermaid.initialize({ startOnLoad: false, theme: dark ? 'dark' : 'default' });
+        items.forEach(function (item) {
+          window.mermaid.render('mermaid-' + item.i + '-' + Date.now(), item.src)
+            .then(function (r) { item.div.innerHTML = r.svg; })
+            .catch(function (e) {
+              item.div.className = 'mermaid-error';
+              item.div.textContent = String(e);
+            });
+        });
+      });
+    }
+
+    function applyHighlightBlocks(container) {
+      var blocks = container.querySelectorAll('pre > code[class*="language-"]:not(.language-mermaid):not(.hljs)');
+      if (!blocks.length) return;
+      ensureHljs().then(function () {
+        ensureHljsStyle();
+        blocks.forEach(function (block) { window.hljs.highlightElement(block); });
+      });
+    }
+
+    function applyCodeEnhancements() {
+      var container = getMainContent();
+      if (!container) return;
+      applyMermaidBlocks(container);
+      applyHighlightBlocks(container);
     }
 
     if (document.readyState === 'loading') {

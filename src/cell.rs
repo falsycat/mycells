@@ -3,7 +3,7 @@ use regex::Regex;
 use std::sync::LazyLock;
 
 static LINK_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\[\[(\d+)\]\]").unwrap());
+    LazyLock::new(|| Regex::new(r"\[\[(\d+)(?:\|([^\]]*))?\]\]").unwrap());
 
 static FILENAME_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^(\d+)-([a-z0-9][a-z0-9-]*)\.md$").unwrap());
@@ -137,4 +137,27 @@ pub fn extract_plain_text(content: &str) -> String {
 
 pub fn link_re() -> &'static Regex {
     &LINK_RE
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn link_re_plain() {
+        let links = extract_outlinks("see [[2026053101]] here");
+        assert_eq!(links, vec!["2026053101"]);
+    }
+
+    #[test]
+    fn link_re_with_text() {
+        let re = link_re();
+        let input = "see [[2026053101|my custom text]] here";
+        let cap = re.captures(input).unwrap();
+        assert_eq!(&cap[1], "2026053101");
+        assert_eq!(cap.get(2).map(|m| m.as_str()), Some("my custom text"));
+
+        let links = extract_outlinks(input);
+        assert_eq!(links, vec!["2026053101"]);
+    }
 }
