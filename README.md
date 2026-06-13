@@ -160,10 +160,10 @@ Use the provided action to build and deploy your cells site automatically.
 ```yaml
 - uses: actions/checkout@v4
   with:
-    fetch-depth: 0  # required for full git history per cell
+    fetch-depth: 0  # full history; omit or use fetch-depth: N for partial history
 ```
 
-> **Note:** `fetch-depth: 0` is required. The default shallow clone (`fetch-depth: 1`) causes all cells to show only the latest commit in their git history.
+> **Note:** Without `fetch-depth: 0`, git history per cell is truncated to the fetched depth. Commits beyond that depth are silently omitted rather than shown incorrectly.
 
 A minimal deploy workflow example:
 

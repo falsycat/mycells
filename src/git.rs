@@ -85,7 +85,7 @@ fn try_commit_file_diff(
     rel_path: &Path,
 ) -> Option<String> {
     let new_tree = commit.tree().ok()?;
-    let old_tree = commit.parent(0).ok().and_then(|p| p.tree().ok());
+    let old_tree = commit.parent(0).ok().and_then(|p| p.tree().ok())?;
 
     let mut diff_opts = git2::DiffOptions::new();
     diff_opts.pathspec(rel_path);
