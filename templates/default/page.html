@@ -1143,34 +1143,40 @@
       var curCY   = viewCYFrom   + (viewCY   - viewCYFrom)   * animEase;
       var curZoom = viewZoomFrom + (viewZoom  - viewZoomFrom) * animEase;
 
-      // Dot-grid background
-      var dotR = 1.2;
-      ctx.fillStyle = c.dotGrid;
+      // Grid background
+      ctx.strokeStyle = c.dotGrid;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
       if (curZoom > 0) {
-        var dotStep = 0.05;
+        var gridStep = 0.05;
         var leftEdge  = curCX - W / (2 * curZoom);
         var rightEdge = curCX + W / (2 * curZoom);
         var topEdge   = curCY - H / (2 * curZoom);
         var botEdge   = curCY + H / (2 * curZoom);
-        var firstGX = Math.ceil(leftEdge  / dotStep) * dotStep;
-        var firstGY = Math.ceil(topEdge   / dotStep) * dotStep;
-        for (var gnx = firstGX; gnx <= rightEdge; gnx += dotStep) {
-          for (var gny = firstGY; gny <= botEdge; gny += dotStep) {
-            ctx.beginPath();
-            ctx.arc(W / 2 + (gnx - curCX) * curZoom, H / 2 + (gny - curCY) * curZoom, dotR, 0, 2 * Math.PI);
-            ctx.fill();
-          }
+        var firstGX = Math.ceil(leftEdge  / gridStep) * gridStep;
+        var firstGY = Math.ceil(topEdge   / gridStep) * gridStep;
+        for (var gnx = firstGX; gnx <= rightEdge; gnx += gridStep) {
+          var sx = W / 2 + (gnx - curCX) * curZoom;
+          ctx.moveTo(sx, 0);
+          ctx.lineTo(sx, H);
+        }
+        for (var gny = firstGY; gny <= botEdge; gny += gridStep) {
+          var sy = H / 2 + (gny - curCY) * curZoom;
+          ctx.moveTo(0, sy);
+          ctx.lineTo(W, sy);
         }
       } else {
-        var dotStep = 28;
-        for (var gx = dotStep / 2; gx < W; gx += dotStep) {
-          for (var gy = dotStep / 2; gy < H; gy += dotStep) {
-            ctx.beginPath();
-            ctx.arc(gx, gy, dotR, 0, 2 * Math.PI);
-            ctx.fill();
-          }
+        var gridStep = 28;
+        for (var gx = gridStep / 2; gx < W; gx += gridStep) {
+          ctx.moveTo(gx, 0);
+          ctx.lineTo(gx, H);
+        }
+        for (var gy = gridStep / 2; gy < H; gy += gridStep) {
+          ctx.moveTo(0, gy);
+          ctx.lineTo(W, gy);
         }
       }
+      ctx.stroke();
 
       if (!layout || !localGraph || localGraph.nodes.length === 0) return;
       if (!curZoom) return;
