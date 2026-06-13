@@ -716,6 +716,22 @@
         }
       }
 
+      // Include nodes from disconnected clusters up to BFS_MAX
+      for (var k = 0; k < graph.nodes.length && visited.size < BFS_MAX; k++) {
+        var kid = graph.nodes[k].id;
+        if (visited.has(kid) || !nodeMap[kid]) continue;
+        var cq = [kid];
+        var cqi = 0;
+        while (cqi < cq.length && visited.size < BFS_MAX) {
+          var cid = cq[cqi++];
+          if (visited.has(cid)) continue;
+          visited.add(cid);
+          (adj[cid] || []).forEach(function(cnb) {
+            if (!visited.has(cnb)) cq.push(cnb);
+          });
+        }
+      }
+
       var nodes = [];
       visited.forEach(function (id) {
         if (nodeMap[id]) nodes.push(nodeMap[id]);
@@ -853,6 +869,15 @@
           };
         } else {
           addMissingNodes(globalPos, newLocal.nodes, newLocal.edges);
+          // Expand globalBounds to include any newly placed nodes outside original bounds
+          newLocal.nodes.forEach(function(nd) {
+            var p = globalPos[nd.id];
+            if (!p) return;
+            if (p.x < globalBounds.minX) globalBounds.minX = p.x;
+            if (p.x > globalBounds.maxX) globalBounds.maxX = p.x;
+            if (p.y < globalBounds.minY) globalBounds.minY = p.y;
+            if (p.y > globalBounds.maxY) globalBounds.maxY = p.y;
+          });
         }
         var newLayout = computeGlobalLayout(globalPos, newLocal.nodes);
 
