@@ -153,6 +153,56 @@ Pass `--template <dir>` to use your own HTML templates. The directory must conta
 
 See [`doc/template.md`](doc/template.md) for the full list of template variables and a minimal example.
 
+## GitHub Actions
+
+Use the provided action to build and deploy your cells site automatically.
+
+```yaml
+- uses: actions/checkout@v4
+  with:
+    fetch-depth: 0  # required for full git history per cell
+```
+
+> **Note:** `fetch-depth: 0` is required. The default shallow clone (`fetch-depth: 1`) causes all cells to show only the latest commit in their git history.
+
+A minimal deploy workflow example:
+
+```yaml
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: falsycat/mycells@main
+        with:
+          cells: .
+          output: dist
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+    steps:
+      - uses: actions/deploy-pages@v4
+```
+
 ## Example Cells
 
 The [`test/example-cells/`](test/example-cells/) directory contains a sample vault you can use as a reference or to try out the tool:
