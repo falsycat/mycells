@@ -684,6 +684,26 @@
     }
 
     var BFS_MAX = 1000;
+
+    function getLayoutAnchor(graph) {
+      // Prefer the 'index' node for a stable, canonical anchor
+      for (var i = 0; i < graph.nodes.length; i++) {
+        if (graph.nodes[i].id === 'index') return 'index';
+      }
+      // Fall back to the highest-degree node
+      var deg = {};
+      graph.edges.forEach(function(e) {
+        deg[e.source] = (deg[e.source] || 0) + 1;
+        deg[e.target] = (deg[e.target] || 0) + 1;
+      });
+      var best = graph.nodes[0] && graph.nodes[0].id;
+      var bestDeg = -1;
+      graph.nodes.forEach(function(n) {
+        if ((deg[n.id] || 0) > bestDeg) { bestDeg = deg[n.id] || 0; best = n.id; }
+      });
+      return best;
+    }
+
     function buildLocalGraph(graph, seedIds) {
       var nodeMap = {};
       graph.nodes.forEach(function (n) { nodeMap[n.id] = n; });
@@ -859,7 +879,13 @@
         communityMap = globalCommunityMap;
 
         if (!globalPos) {
-          globalPos = computeRawLayout(newLocal.nodes, newLocal.edges, seedIds[0]);
+          // Sort nodes by ID so the force simulation is deterministic regardless
+          // of which page is loaded first (or after F5).
+          var layoutAnchor = getLayoutAnchor(graph);
+          var sortedNodes = graph.nodes.slice().sort(function(a, b) {
+            return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+          });
+          globalPos = computeRawLayout(sortedNodes, graph.edges, layoutAnchor);
           var allIds = Object.keys(globalPos);
           var xs = allIds.map(function (id) { return globalPos[id].x; });
           var ys = allIds.map(function (id) { return globalPos[id].y; });
